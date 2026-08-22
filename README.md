@@ -67,17 +67,23 @@ flet_media_scanner = "flet_media_scanner.Extension"
 ## Usage
 
 ```python
+import os
 import flet as ft
 from flet_media_scanner import MediaScanner, SaveResult
 
 async def main(page: ft.Page):
     scanner = MediaScanner()
-    page.services.append(scanner)
+    storage = ft.StoragePaths()
+    page.services.extend([scanner, storage])
     page.update()
 
+    # Use StoragePaths to get the app cache directory (cross-device safe)
+    cache_dir = await storage.get_application_cache_directory()
+
     # ── Video ──────────────────────────────────────────────────────────────
+    video_path = os.path.join(cache_dir, "video.mp4")
     result: SaveResult = await scanner.save_video(
-        "/data/user/0/com.example.app/cache/video.mp4",
+        video_path,
         file_name="my_video.mp4",
         album="MyApp",
     )
@@ -89,8 +95,9 @@ async def main(page: ft.Page):
         print(v["display_name"], v["content_uri"])
 
     # ── Audio ──────────────────────────────────────────────────────────────
+    audio_path = os.path.join(cache_dir, "song.mp3")
     result = await scanner.save_audio(
-        "/data/user/0/com.example.app/cache/song.mp3",
+        audio_path,
         file_name="song.mp3",
         album="MyApp",
     )
@@ -102,8 +109,9 @@ async def main(page: ft.Page):
         print(t["display_name"], t["mime_type"])
 
     # ── Image ──────────────────────────────────────────────────────────────
+    image_path = os.path.join(cache_dir, "photo.jpg")
     result = await scanner.save_image(
-        "/data/user/0/com.example.app/cache/photo.jpg",
+        image_path,
         file_name="photo.jpg",
         album="MyApp",
     )
