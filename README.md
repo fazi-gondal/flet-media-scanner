@@ -234,6 +234,7 @@ Each dict returned by `list_videos()`, `list_audio()`, and `list_images()` conta
 
 | Version | Changes |
 |---------|---------|
+| **1.0.1** | Updated README with badges, author info, architecture overview, and full changelog |
 | **1.0.0** | Stable release — removed `media_scanner` Flutter package, full native Kotlin only |
 | **0.86.5** | Cleaned up `pubspec.yaml`, removed unused Flutter deps |
 | **0.86.4** | Updated README to use `ft.StoragePaths` for cross-device safe paths |
