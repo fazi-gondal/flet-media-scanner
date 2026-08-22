@@ -233,6 +233,7 @@ class FletMediaScannerPlugin :
             "saveImage"          -> saveImage(call, result)
             "listImages"         -> listImages(call, result)
             "deleteMedia"        -> deleteMedia(call, result)
+            "deleteAssets"       -> deleteAssets(call, result)
             else                 -> result.notImplemented()
         }
     }
@@ -854,5 +855,44 @@ class FletMediaScannerPlugin :
             Log.e(TAG, "deleteMedia: ${e.message}", e)
             result.error("DELETE_ERROR", e.message, e.toString())
         }
+    }
+
+    /**
+     * Batch-delete a list of content:// URIs in a single call.
+     *
+     * Arguments:
+     *   contentUris  List<String>  — URIs as returned by save_*/get_assets
+     *
+     * Returns { success, results: List<Boolean>, deleted_count, total }.
+     */
+    private fun deleteAssets(call: MethodCall, result: Result) {
+        @Suppress("UNCHECKED_CAST")
+        val uris = call.argument<List<String>>("contentUris") ?: emptyList()
+
+        if (uris.isEmpty()) {
+            result.success(mapOf("success" to true, "results" to emptyList<Boolean>(),
+                "deleted_count" to 0, "total" to 0))
+            return
+        }
+
+        val resolver = context.contentResolver
+        val results = mutableListOf<Boolean>()
+
+        for (uriStr in uris) {
+            val deleted = try {
+                resolver.delete(Uri.parse(uriStr), null, null) > 0
+            } catch (e: Exception) {
+                Log.w(TAG, "deleteAssets: failed for $uriStr — ${e.message}")
+                false
+            }
+            results += deleted
+        }
+
+        result.success(mapOf(
+            "success"       to true,
+            "results"       to results,
+            "deleted_count" to results.count { it },
+            "total"         to uris.size,
+        ))
     }
 }

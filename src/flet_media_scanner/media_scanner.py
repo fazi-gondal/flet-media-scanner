@@ -351,6 +351,49 @@ class MediaScanner(ft.Service):
             print(f"[MediaScanner] delete_album error: {e}")
             return 0
 
+    async def delete_assets(
+        self,
+        content_uris: list[str],
+    ) -> list[bool]:
+        """
+        Batch-delete multiple MediaStore items in a single native call.
+
+        Parameters
+        ----------
+        content_uris : list[str]
+            List of ``content://`` URIs as returned by ``save_*()`` or
+            ``get_assets()``.
+
+        Returns
+        -------
+        list[bool]
+            One boolean per URI — ``True`` if the item was deleted successfully,
+            ``False`` otherwise (already removed, permission denied, bad URI, …).
+
+        Example
+        -------
+        ::
+
+            assets, _ = await scanner.get_assets(media_type="image", album="Temp")
+            uris = [a.content_uri for a in assets]
+            results = await scanner.delete_assets(uris)
+            deleted = sum(results)
+            print(f"Deleted {deleted}/{len(uris)} items")
+        """
+        if not content_uris:
+            return []
+        try:
+            raw = await self._invoke_method(
+                "delete_assets",
+                {"contentUris": list(content_uris)},
+                timeout=30.0,
+            )
+            payload = json.loads(raw) if raw else {}
+            return [bool(r) for r in (payload.get("results") or [])]
+        except Exception as e:
+            print(f"[MediaScanner] delete_assets error: {e}")
+            return [False] * len(content_uris)
+
     # ─────────────────────────────── Thumbnail ─────────────────────────────────
 
     async def get_thumbnail(

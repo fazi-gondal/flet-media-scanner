@@ -75,6 +75,7 @@ class MediaScannerService extends FletService {
       "list_images"         => await _invokeChannel("listImages", arguments),
       // ── Delete (universal) ────────────────────────────────────────────────
       "delete_media"        => await _invokeDeleteChannel(arguments),
+      "delete_assets"       => await _invokeChannel("deleteAssets", arguments),
       // ── Legacy scan ───────────────────────────────────────────────────────
       "scan_media"          => await _scanMedia(arguments),
       _                     => throw Exception(
@@ -156,10 +157,11 @@ class MediaScannerService extends FletService {
       if (args.containsKey("sortBy")) "sortBy": args["sortBy"],
       if (args.containsKey("sortOrder")) "sortOrder": args["sortOrder"],
       if (args.containsKey("relativePath")) "relativePath": args["relativePath"],
-      if (args.containsKey("contentUri")) "contentUri": args["contentUri"],
-      if (args.containsKey("content_uri")) "contentUri": args["content_uri"],
-      if (args.containsKey("width")) "width": args["width"],
-      if (args.containsKey("height")) "height": args["height"],
+      if (args.containsKey('contentUri')) 'contentUri': args['contentUri'],
+      if (args.containsKey('content_uri')) 'contentUri': args['content_uri'],
+      if (args.containsKey('contentUris')) 'contentUris': args['contentUris'],
+      if (args.containsKey('width')) 'width': args['width'],
+      if (args.containsKey('height')) 'height': args['height'],
     };
   }
 
