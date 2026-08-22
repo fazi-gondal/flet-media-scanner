@@ -6,11 +6,14 @@ import android.content.ContentUris
 import android.content.ContentValues
 import android.content.Context
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
+import android.util.Base64
 import android.util.Log
+import android.util.Size
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import io.flutter.embedding.engine.plugins.FlutterPlugin
@@ -21,6 +24,7 @@ import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.MethodChannel.MethodCallHandler
 import io.flutter.plugin.common.MethodChannel.Result
 import io.flutter.plugin.common.PluginRegistry
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileInputStream
 import java.net.URLConnection
@@ -137,6 +141,7 @@ class FletMediaScannerPlugin :
             "getAssets"          -> getAssets(call, result)
             "getAlbums"          -> getAlbums(call, result)
             "deleteAlbum"        -> deleteAlbum(call, result)
+            "getThumbnail"       -> getThumbnail(call, result)
             "saveVideo"          -> saveVideo(call, result)
             "deleteVideo"        -> deleteMedia(call, result)
             "listVideos"         -> listVideos(call, result)
@@ -196,6 +201,71 @@ class FletMediaScannerPlugin :
     private fun getPermStatus(permission: String): String =
         if (ContextCompat.checkSelfPermission(context, permission) ==
             PackageManager.PERMISSION_GRANTED) "granted" else "denied"
+
+    // ─────────────────────────── Thumbnail ─────────────────────────────────
+
+    /**
+     * Generate a JPEG thumbnail for an image asset and return it as base64.
+     *
+     * Arguments:
+     *   contentUri  String  — the content:// URI of the image
+     *   width       Int     — desired width  (default 200, ignored on API < 29)
+     *   height      Int     — desired height (default 200, ignored on API < 29)
+     *
+     * Returns { success, base64, mime_type, width, height }.
+     * Video thumbnails are not supported yet (planned for a future release).
+     */
+    @Suppress("DEPRECATION")
+    private fun getThumbnail(call: MethodCall, result: Result) {
+        val uriStr = call.argument<String>("contentUri")
+            ?: call.argument<String>("content_uri")
+        val width  = call.argument<Int>("width")  ?: 200
+        val height = call.argument<Int>("height") ?: 200
+
+        if (uriStr.isNullOrBlank()) {
+            result.error("INVALID_ARGUMENT", "contentUri is required", null)
+            return
+        }
+
+        try {
+            val uri = Uri.parse(uriStr)
+            val bitmap: Bitmap? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                // API 29+: modern loadThumbnail — respects requested size
+                context.contentResolver.loadThumbnail(
+                    uri, Size(width, height), null
+                )
+            } else {
+                // API < 29: legacy MINI thumbnail (~512×384) — size params ignored
+                val id = ContentUris.parseId(uri)
+                MediaStore.Images.Thumbnails.getThumbnail(
+                    context.contentResolver,
+                    id,
+                    MediaStore.Images.Thumbnails.MINI_KIND,
+                    null,
+                )
+            }
+
+            if (bitmap == null) {
+                result.error("THUMBNAIL_ERROR", "Thumbnail not available for: $uriStr", null)
+                return
+            }
+
+            val out = ByteArrayOutputStream()
+            bitmap.compress(Bitmap.CompressFormat.JPEG, 85, out)
+            val base64 = Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
+
+            result.success(mapOf(
+                "success"   to true,
+                "base64"    to base64,
+                "mime_type" to "image/jpeg",
+                "width"     to bitmap.width,
+                "height"    to bitmap.height,
+            ))
+        } catch (e: Exception) {
+            Log.e(TAG, "getThumbnail: ${e.message}", e)
+            result.error("THUMBNAIL_ERROR", e.message, e.toString())
+        }
+    }
 
     // ─────────────────────────── Album management ─────────────────────────────
 

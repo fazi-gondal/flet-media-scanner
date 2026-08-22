@@ -326,6 +326,61 @@ class MediaScanner(ft.Service):
             print(f"[MediaScanner] delete_album error: {e}")
             return 0
 
+    # ─────────────────────────────── Thumbnail ─────────────────────────────────
+
+    async def get_thumbnail(
+        self,
+        content_uri: str,
+        width: int = 200,
+        height: int = 200,
+    ) -> str:
+        """
+        Return a base64-encoded JPEG thumbnail for an image asset.
+
+        Use directly with :class:`flet.Image`::
+
+            b64 = await scanner.get_thumbnail(asset.content_uri, width=300, height=300)
+            if b64:
+                page.add(ft.Image(src_base64=b64))
+
+        Parameters
+        ----------
+        content_uri : str
+            The ``content://`` URI as returned by ``save_image()`` or ``get_assets()``.
+        width : int
+            Desired thumbnail width in pixels (default 200).
+            Respected on Android 10+ (API 29+). Ignored on older devices.
+        height : int
+            Desired thumbnail height in pixels (default 200).
+
+        Returns
+        -------
+        str
+            Base64-encoded JPEG string, or ``""`` on failure.
+
+        Notes
+        -----
+        - Images only. Video thumbnails are planned for a future release.
+        - On Android < 10 the thumbnail size is fixed at ~512×384 (MINI_KIND).
+        """
+        if not content_uri:
+            return ""
+        try:
+            raw = await self._invoke_method(
+                "get_thumbnail",
+                {
+                    "contentUri": content_uri,
+                    "width": width,
+                    "height": height,
+                },
+                timeout=20.0,
+            )
+            payload = json.loads(raw) if raw else {}
+            return str(payload.get("base64") or "")
+        except Exception as e:
+            print(f"[MediaScanner] get_thumbnail error: {e}")
+            return ""
+
     # ─────────────────────────────────── Video ────────────────────────────────
 
     async def save_video(
