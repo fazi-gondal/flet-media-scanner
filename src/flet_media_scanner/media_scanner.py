@@ -19,6 +19,27 @@ class SaveResult:
 
 
 @dataclass
+class MediaAsset:
+    """
+    A single media item returned by :meth:`MediaScanner.get_assets`.
+
+    ``width``, ``height`` are 0 for audio files.
+    ``duration`` (milliseconds) is 0 for images.
+    """
+    content_uri: str = ""
+    display_name: str = ""
+    mime_type: str = ""
+    media_type: str = ""   # "video" | "audio" | "image"
+    relative_path: str = ""
+    size: int = 0
+    date_added: int = 0
+    date_modified: int = 0
+    width: int = 0
+    height: int = 0
+    duration: int = 0      # milliseconds
+
+
+@dataclass
 class PermissionStatus:
     """
     Holds the runtime permission status for each media type.
@@ -125,6 +146,83 @@ class MediaScanner(ft.Service):
             )
         except Exception:
             return PermissionStatus()
+
+    # ─────────────────────────────── Generic query ────────────────────────────
+
+    async def get_assets(
+        self,
+        media_type: str = "all",
+        album: str | None = None,
+        mime_type: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+        sort_by: str = "date_added",
+        sort_order: str = "desc",
+    ) -> tuple[list[MediaAsset], int]:
+        """
+        Query the device MediaStore and return a paginated list of assets.
+
+        Parameters
+        ----------
+        media_type : str
+            ``"all"`` (default), ``"video"``, ``"audio"``, or ``"image"``.
+        album : str | None
+            Filter to a specific album sub-folder, e.g. ``"MyApp"``.
+            ``None`` returns assets from all albums.
+        mime_type : str | None
+            Exact MIME filter, e.g. ``"video/mp4"`` or ``"image/jpeg"``.
+        limit : int
+            Maximum number of items to return (default 50, ``-1`` = no limit).
+        offset : int
+            Number of items to skip (for pagination).
+        sort_by : str
+            ``"date_added"`` (default), ``"date_modified"``, ``"display_name"``,
+            ``"size"``, or ``"duration"``.
+        sort_order : str
+            ``"desc"`` (default) or ``"asc"``.
+
+        Returns
+        -------
+        tuple[list[MediaAsset], int]
+            ``(assets, total_count)`` where *total_count* is the number of
+            matching items **before** pagination.
+        """
+        try:
+            args: dict = {
+                "mediaType": media_type,
+                "limit": limit,
+                "offset": offset,
+                "sortBy": sort_by,
+                "sortOrder": sort_order,
+            }
+            if album is not None:
+                args["album"] = album
+            if mime_type is not None:
+                args["mimeType"] = mime_type
+
+            raw = await self._invoke_method("get_assets", args, timeout=30.0)
+            payload = json.loads(raw) if raw else {}
+            total = int(payload.get("total") or 0)
+            assets = [
+                MediaAsset(
+                    content_uri=str(a.get("content_uri") or ""),
+                    display_name=str(a.get("display_name") or ""),
+                    mime_type=str(a.get("mime_type") or ""),
+                    media_type=str(a.get("media_type") or ""),
+                    relative_path=str(a.get("relative_path") or ""),
+                    size=int(a.get("size") or 0),
+                    date_added=int(a.get("date_added") or 0),
+                    date_modified=int(a.get("date_modified") or 0),
+                    width=int(a.get("width") or 0),
+                    height=int(a.get("height") or 0),
+                    duration=int(a.get("duration") or 0),
+                )
+                for a in (payload.get("assets") or [])
+            ]
+            return assets, total
+        except Exception as e:
+            print(f"[MediaScanner] get_assets error: {e}")
+            return [], 0
 
     # ─────────────────────────────────── Video ────────────────────────────────
 
