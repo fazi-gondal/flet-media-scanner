@@ -19,6 +19,7 @@ import androidx.core.content.ContextCompat
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.embedding.engine.plugins.activity.ActivityAware
 import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
+import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.MethodChannel.MethodCallHandler
@@ -34,16 +35,25 @@ class FletMediaScannerPlugin :
     FlutterPlugin,
     MethodCallHandler,
     ActivityAware,
-    PluginRegistry.RequestPermissionsResultListener {
+    PluginRegistry.RequestPermissionsResultListener,
+    EventChannel.StreamHandler {
 
     private lateinit var channel: MethodChannel
     private lateinit var context: Context
     private var activity: Activity? = null
     private var pendingPermResult: Result? = null
 
+    // Change observer
+    private lateinit var eventChannel: EventChannel
+    private var eventSink: EventChannel.EventSink? = null
+    private var imageObserver: android.database.ContentObserver? = null
+    private var videoObserver: android.database.ContentObserver? = null
+    private var audioObserver: android.database.ContentObserver? = null
+
     companion object {
         private const val TAG = "FletMediaScanner"
         private const val CHANNEL = "flet_media_scanner/scan"
+        private const val EVENT_CHANNEL = "flet_media_scanner/changes"
         private const val PERM_REQUEST_CODE = 9427
 
         private val MIME_BY_EXTENSION = mapOf(
@@ -96,10 +106,14 @@ class FletMediaScannerPlugin :
         context = binding.applicationContext
         channel = MethodChannel(binding.binaryMessenger, CHANNEL)
         channel.setMethodCallHandler(this)
+        eventChannel = EventChannel(binding.binaryMessenger, EVENT_CHANNEL)
+        eventChannel.setStreamHandler(this)
     }
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         channel.setMethodCallHandler(null)
+        eventChannel.setStreamHandler(null)
+        unregisterObservers()
     }
 
     // ─────────────────────────── ActivityAware ────────────────────────────────
@@ -130,6 +144,75 @@ class FletMediaScannerPlugin :
         pendingPermResult = null
         pending.success(mapOf("success" to true, "permissions" to buildPermissionMap()))
         return true
+    }
+
+    // ──────────────────── EventChannel.StreamHandler (Change observer) ────────────────────
+
+    /**
+     * Called by Flutter when a Dart listener subscribes to the EventChannel.
+     * Registers ContentObservers on all three MediaStore collections.
+     */
+    override fun onListen(arguments: Any?, sink: EventChannel.EventSink?) {
+        eventSink = sink
+        registerObservers()
+        Log.d(TAG, "EventChannel: listening for MediaStore changes")
+    }
+
+    /**
+     * Called by Flutter when the Dart listener cancels the subscription.
+     * Unregisters all ContentObservers to avoid leaks.
+     */
+    override fun onCancel(arguments: Any?) {
+        unregisterObservers()
+        eventSink = null
+        Log.d(TAG, "EventChannel: cancelled")
+    }
+
+    private fun registerObservers() {
+        val resolver = context.contentResolver
+        val handler = android.os.Handler(android.os.Looper.getMainLooper())
+
+        imageObserver = makeObserver(handler, "image")
+        videoObserver = makeObserver(handler, "video")
+        audioObserver = makeObserver(handler, "audio")
+
+        resolver.registerContentObserver(
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI, true, imageObserver!!)
+        resolver.registerContentObserver(
+            MediaStore.Video.Media.EXTERNAL_CONTENT_URI, true, videoObserver!!)
+        resolver.registerContentObserver(
+            MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, true, audioObserver!!)
+    }
+
+    private fun unregisterObservers() {
+        val resolver = context.contentResolver
+        imageObserver?.let { resolver.unregisterContentObserver(it) ; imageObserver = null }
+        videoObserver?.let { resolver.unregisterContentObserver(it) ; videoObserver = null }
+        audioObserver?.let { resolver.unregisterContentObserver(it) ; audioObserver = null }
+    }
+
+    private fun makeObserver(
+        handler: android.os.Handler,
+        collection: String,
+    ): android.database.ContentObserver {
+        return object : android.database.ContentObserver(handler) {
+            override fun onChange(selfChange: Boolean) = sendChange(collection, null)
+            override fun onChange(selfChange: Boolean, uri: Uri?) = sendChange(collection, uri)
+        }
+    }
+
+    /**
+     * Post a change event to the Dart EventChannel sink.
+     * Always dispatched on the main looper so the sink call is thread-safe.
+     */
+    private fun sendChange(collection: String, uri: Uri?) {
+        val payload = mapOf(
+            "collection" to collection,
+            "uri"        to (uri?.toString() ?: ""),
+        )
+        android.os.Handler(android.os.Looper.getMainLooper()).post {
+            eventSink?.success(payload)
+        }
     }
 
     // ─────────────────────────── MethodCallHandler ────────────────────────────

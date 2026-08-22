@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flet/flet.dart';
@@ -8,13 +9,40 @@ class MediaScannerService extends FletService {
   static const MethodChannel _channel =
       MethodChannel('flet_media_scanner/scan');
 
+  static const EventChannel _eventChannel =
+      EventChannel('flet_media_scanner/changes');
+
+  StreamSubscription<dynamic>? _changeSubscription;
+
   MediaScannerService({required super.control});
 
   @override
   void init() {
     super.init();
     control.addInvokeMethodListener(_onInvokeMethod);
+    _startChangeObserver();
     debugPrint("MediaScannerService: initialized");
+  }
+
+  /// Subscribe to the Kotlin ContentObserver EventChannel.
+  /// Each event is forwarded to Python as a "change" event on the control.
+  void _startChangeObserver() {
+    _changeSubscription = _eventChannel
+        .receiveBroadcastStream()
+        .listen(
+          (dynamic event) {
+            if (event is Map) {
+              final payload = Map<String, dynamic>.from(event);
+              debugPrint("MediaScannerService: change event: $payload");
+              control.triggerEvent("change", payload);
+            }
+          },
+          onError: (dynamic error) {
+            debugPrint(
+                "MediaScannerService: change observer error: $error");
+          },
+          cancelOnError: false,
+        );
   }
 
   Future<dynamic> _onInvokeMethod(String methodName, dynamic args) async {
@@ -33,7 +61,7 @@ class MediaScannerService extends FletService {
       // ── Album management ──────────────────────────────────────────────────
       "get_albums"          => await _invokeChannel("getAlbums", arguments),
       "delete_album"        => await _invokeChannel("deleteAlbum", arguments),
-      // ── Thumbnail ───────────────────────────────────────────────────────
+      // ── Thumbnail ─────────────────────────────────────────────────────────
       "get_thumbnail"       => await _invokeChannel("getThumbnail", arguments),
       // ── Video ─────────────────────────────────────────────────────────────
       "save_video"          => await _invokeChannel("saveVideo", arguments),
@@ -54,7 +82,6 @@ class MediaScannerService extends FletService {
     };
   }
 
-  /// Generic: calls any Kotlin method that takes named args and returns a Map.
   Future<String> _invokeChannel(
       String kotlinMethod, Map<String, dynamic> args) async {
     try {
@@ -78,7 +105,6 @@ class MediaScannerService extends FletService {
     }
   }
 
-  /// Delete: accepts both content_uri (Python) and contentUri (Kotlin).
   Future<String> _invokeDeleteChannel(Map<String, dynamic> args) async {
     final contentUri =
         (args["contentUri"] ?? args["content_uri"]) as String? ?? "";
@@ -105,7 +131,6 @@ class MediaScannerService extends FletService {
     }
   }
 
-  /// Deprecated — use save_video/save_audio/save_image instead.
   Future<String> _scanMedia(Map<String, dynamic> args) async {
     final String path = args["path"] as String? ?? "";
     debugPrint(
@@ -124,8 +149,17 @@ class MediaScannerService extends FletService {
       if (args.containsKey("file_name")) "fileName": args["file_name"],
       if (args.containsKey("fileName")) "fileName": args["fileName"],
       if (args.containsKey("album")) "album": args["album"],
+      if (args.containsKey("mediaType")) "mediaType": args["mediaType"],
+      if (args.containsKey("mimeType")) "mimeType": args["mimeType"],
+      if (args.containsKey("limit")) "limit": args["limit"],
+      if (args.containsKey("offset")) "offset": args["offset"],
+      if (args.containsKey("sortBy")) "sortBy": args["sortBy"],
+      if (args.containsKey("sortOrder")) "sortOrder": args["sortOrder"],
+      if (args.containsKey("relativePath")) "relativePath": args["relativePath"],
       if (args.containsKey("contentUri")) "contentUri": args["contentUri"],
       if (args.containsKey("content_uri")) "contentUri": args["content_uri"],
+      if (args.containsKey("width")) "width": args["width"],
+      if (args.containsKey("height")) "height": args["height"],
     };
   }
 
@@ -133,6 +167,8 @@ class MediaScannerService extends FletService {
 
   @override
   void dispose() {
+    _changeSubscription?.cancel();
+    _changeSubscription = null;
     debugPrint("MediaScannerService: disposed");
     super.dispose();
   }

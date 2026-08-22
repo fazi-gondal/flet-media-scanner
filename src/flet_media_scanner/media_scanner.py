@@ -111,6 +111,31 @@ class MediaScanner(ft.Service):
 
     on_saved: Optional[ft.EventHandler[Any]] = None
     on_scanned: Optional[ft.EventHandler[Any]] = None
+    on_change: Optional[ft.EventHandler[Any]] = None
+    """
+    Fired whenever the Android MediaStore reports a change.
+
+    ``e.data`` is a JSON string::
+
+        {
+            "collection": "image" | "video" | "audio",
+            "uri": "content://..."  # may be empty on some devices
+        }
+
+    Example::
+
+        import json
+
+        def handle_change(e):
+            data = json.loads(e.data)
+            print(f"{data['collection']} changed — uri={data.get('uri','')}")
+
+        scanner.on_change = handle_change
+
+    The observer starts automatically when the first Dart listener
+    subscribes. It fires for **any** MediaStore change on the device
+    (not just changes made by your app), so debounce or filter as needed.
+    """
 
     # ─────────────────────────────── Permissions ──────────────────────────────
 
