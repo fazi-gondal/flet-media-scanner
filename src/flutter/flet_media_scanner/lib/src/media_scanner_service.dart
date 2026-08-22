@@ -76,6 +76,9 @@ class MediaScannerService extends FletService {
       // ── Delete (universal) ────────────────────────────────────────────────
       "delete_media"        => await _invokeDeleteChannel(arguments),
       "delete_assets"       => await _invokeChannel("deleteAssets", arguments),
+      // ── Rename / Move ─────────────────────────────────────────────────
+      "rename_asset"        => await _invokeChannel("renameAsset", arguments),
+      "move_asset"          => await _invokeChannel("moveAsset", arguments),
       // ── Legacy scan ───────────────────────────────────────────────────────
       "scan_media"          => await _scanMedia(arguments),
       _                     => throw Exception(
@@ -160,6 +163,8 @@ class MediaScannerService extends FletService {
       if (args.containsKey('contentUri')) 'contentUri': args['contentUri'],
       if (args.containsKey('content_uri')) 'contentUri': args['content_uri'],
       if (args.containsKey('contentUris')) 'contentUris': args['contentUris'],
+      if (args.containsKey('newName')) 'newName': args['newName'],
+      if (args.containsKey('newRelativePath')) 'newRelativePath': args['newRelativePath'],
       if (args.containsKey('width')) 'width': args['width'],
       if (args.containsKey('height')) 'height': args['height'],
     };

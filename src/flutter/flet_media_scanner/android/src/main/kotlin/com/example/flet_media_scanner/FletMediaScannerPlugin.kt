@@ -234,6 +234,8 @@ class FletMediaScannerPlugin :
             "listImages"         -> listImages(call, result)
             "deleteMedia"        -> deleteMedia(call, result)
             "deleteAssets"       -> deleteAssets(call, result)
+            "renameAsset"        -> renameAsset(call, result)
+            "moveAsset"          -> moveAsset(call, result)
             else                 -> result.notImplemented()
         }
     }
@@ -894,5 +896,106 @@ class FletMediaScannerPlugin :
             "deleted_count" to results.count { it },
             "total"         to uris.size,
         ))
+    }
+
+    // ──────────────────────────── Rename / Move ───────────────────────────────
+
+    /**
+     * Rename a MediaStore asset in-place by updating DISPLAY_NAME.
+     * Works on all Android versions.
+     *
+     * Arguments:
+     *   contentUri  String  — content:// URI of the asset
+     *   newName     String  — new filename (with extension)
+     *
+     * Returns { success, content_uri, display_name, updated_rows }.
+     */
+    private fun renameAsset(call: MethodCall, result: Result) {
+        val uriStr  = call.argument<String>("contentUri") ?: call.argument<String>("content_uri")
+        val newName = call.argument<String>("newName")?.trim()?.takeIf { it.isNotBlank() }
+
+        if (uriStr.isNullOrBlank() || newName == null) {
+            result.error("INVALID_ARGUMENT", "contentUri and newName are required", null); return
+        }
+
+        try {
+            val uri = Uri.parse(uriStr)
+            val values = ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, newName)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
+                    put(MediaStore.MediaColumns.IS_PENDING, 1)
+            }
+            val rows = context.contentResolver.update(uri, values, null, null)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && rows > 0) {
+                context.contentResolver.update(uri, ContentValues().apply {
+                    put(MediaStore.MediaColumns.IS_PENDING, 0)
+                }, null, null)
+            }
+            result.success(mapOf(
+                "success"      to (rows > 0),
+                "content_uri"  to uriStr,
+                "display_name" to newName,
+                "updated_rows" to rows,
+            ))
+        } catch (e: Exception) {
+            Log.e(TAG, "renameAsset: ${e.message}", e)
+            result.error("RENAME_ERROR", e.message, e.toString())
+        }
+    }
+
+    /**
+     * Move a MediaStore asset to a different folder by updating RELATIVE_PATH.
+     * Optionally rename the file at the same time via [newName].
+     * Requires Android 10+ (API 29) — returns error on older devices.
+     *
+     * Arguments:
+     *   contentUri       String  — content:// URI of the asset
+     *   newRelativePath  String  — target folder, e.g. "Movies/Archive"
+     *   newName          String? — new filename (optional; keeps existing name if omitted)
+     *
+     * Returns { success, content_uri, relative_path, display_name, updated_rows }.
+     */
+    private fun moveAsset(call: MethodCall, result: Result) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            result.error("UNSUPPORTED",
+                "moveAsset requires Android 10+ (API 29); use rename_asset on older devices", null)
+            return
+        }
+
+        val uriStr          = call.argument<String>("contentUri") ?: call.argument<String>("content_uri")
+        val newRelativePath = call.argument<String>("newRelativePath")
+            ?.trim()?.trim('/')?.takeIf { it.isNotBlank() }
+        val newName         = call.argument<String>("newName")?.trim()?.takeIf { it.isNotBlank() }
+
+        if (uriStr.isNullOrBlank() || newRelativePath == null) {
+            result.error("INVALID_ARGUMENT",
+                "contentUri and newRelativePath are required", null)
+            return
+        }
+
+        try {
+            val uri = Uri.parse(uriStr)
+            val values = ContentValues().apply {
+                put(MediaStore.MediaColumns.RELATIVE_PATH, "$newRelativePath/")
+                put(MediaStore.MediaColumns.IS_PENDING, 1)
+                if (newName != null) put(MediaStore.MediaColumns.DISPLAY_NAME, newName)
+            }
+            val rows = context.contentResolver.update(uri, values, null, null)
+            if (rows > 0) {
+                context.contentResolver.update(uri, ContentValues().apply {
+                    put(MediaStore.MediaColumns.IS_PENDING, 0)
+                }, null, null)
+            }
+            result.success(mapOf(
+                "success"       to (rows > 0),
+                "content_uri"  to uriStr,
+                "relative_path" to newRelativePath,
+                "display_name"  to (newName ?: ""),
+                "updated_rows"  to rows,
+            ))
+        } catch (e: Exception) {
+            Log.e(TAG, "moveAsset: ${e.message}", e)
+            result.error("MOVE_ERROR", e.message, e.toString())
+        }
     }
 }

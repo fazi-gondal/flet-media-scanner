@@ -535,6 +535,101 @@ class MediaScanner(ft.Service):
         """Delete a MediaStore video item by its content:// URI. Alias for delete_media()."""
         return await self.delete_media(content_uri)
 
+    async def rename_asset(self, content_uri: str, new_name: str) -> bool:
+        """
+        Rename a MediaStore asset in-place by changing its ``DISPLAY_NAME``.
+
+        Works on all Android versions. The ``content://`` URI stays the same
+        after renaming; only the visible filename changes.
+
+        Parameters
+        ----------
+        content_uri : str
+            The ``content://`` URI of the asset.
+        new_name : str
+            New filename **including extension** (e.g. ``"holiday_2024.mp4"``).
+
+        Returns
+        -------
+        bool
+            ``True`` if the rename succeeded.
+        """
+        if not content_uri or not new_name:
+            return False
+        try:
+            raw = await self._invoke_method(
+                "rename_asset",
+                {"contentUri": content_uri, "newName": new_name.strip()},
+                timeout=15.0,
+            )
+            payload = json.loads(raw) if raw else {}
+            return bool(payload.get("success"))
+        except Exception as e:
+            print(f"[MediaScanner] rename_asset error: {e}")
+            return False
+
+    async def move_asset(
+        self,
+        content_uri: str,
+        new_relative_path: str,
+        new_name: str | None = None,
+    ) -> bool:
+        """
+        Move a MediaStore asset to a different folder by updating ``RELATIVE_PATH``.
+
+        Optionally rename the file at the same time.
+
+        **Requires Android 10+ (API 29).** Returns ``False`` on older devices.
+
+        Parameters
+        ----------
+        content_uri : str
+            The ``content://`` URI of the asset.
+        new_relative_path : str
+            Target folder relative to the external storage root,
+            e.g. ``"Movies/Archive"`` or ``"Pictures/Edited"``.
+        new_name : str | None
+            Optional new filename (with extension). Pass ``None`` to keep the
+            existing name.
+
+        Returns
+        -------
+        bool
+            ``True`` if the move (and optional rename) succeeded.
+
+        Example
+        -------
+        ::
+
+            # Move a video to an archive folder
+            ok = await scanner.move_asset(
+                asset.content_uri,
+                new_relative_path="Movies/Archive",
+            )
+
+            # Move and rename simultaneously
+            ok = await scanner.move_asset(
+                asset.content_uri,
+                new_relative_path="Pictures/Edited",
+                new_name="cropped_photo.jpg",
+            )
+        """
+        if not content_uri or not new_relative_path:
+            return False
+        try:
+            args: dict = {
+                "contentUri": content_uri,
+                "newRelativePath": new_relative_path.strip("/"),
+            }
+            if new_name:
+                args["newName"] = new_name.strip()
+            raw = await self._invoke_method("move_asset", args, timeout=20.0)
+            payload = json.loads(raw) if raw else {}
+            return bool(payload.get("success"))
+        except Exception as e:
+            print(f"[MediaScanner] move_asset error: {e}")
+            return False
+
     # ─────────────────────────────────── Legacy ───────────────────────────────
 
     async def scan_media(self, file_path: str) -> bool:
