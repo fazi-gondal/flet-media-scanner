@@ -2,11 +2,26 @@
 
 A [Flet](https://flet.dev) extension for Android **MediaStore** integration — save, list, and delete videos in the device Gallery without requiring broad storage permissions.
 
+Supports **MP4**, **MKV** (Matroska), **WebM**, and other common video containers. MIME type is resolved automatically from the file extension.
+
 ## Requirements
 
 - **Platform**: Android only (no-op on other platforms)
 - **Android**: API 23+ (minSdk 23)
 - **Flet**: >= 0.86.0
+
+## Supported Formats
+
+| Extension | MIME Type              |
+|-----------|------------------------|
+| `.mp4`    | `video/mp4`            |
+| `.mkv`    | `video/x-matroska`     |
+| `.webm`   | `video/webm`           |
+| `.avi`    | `video/x-msvideo`      |
+| `.mov`    | `video/quicktime`      |
+| `.3gp`    | `video/3gpp`           |
+| `.ts`     | `video/mp2t`           |
+| `.flv`    | `video/x-flv`          |
 
 ## Installation
 

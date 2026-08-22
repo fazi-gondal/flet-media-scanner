@@ -16,6 +16,7 @@ import io.flutter.plugin.common.MethodChannel.Result
 import java.io.File
 import java.io.FileInputStream
 import java.net.URLConnection
+import java.util.Locale
 
 class FletMediaScannerPlugin : FlutterPlugin, MethodCallHandler {
     private lateinit var channel: MethodChannel
@@ -24,6 +25,25 @@ class FletMediaScannerPlugin : FlutterPlugin, MethodCallHandler {
     companion object {
         private const val TAG = "FletMediaScanner"
         private const val CHANNEL = "flet_media_scanner/scan"
+
+        /** MIME types by extension — extends URLConnection which misses MKV/WebM on some OSes. */
+        private val MIME_BY_EXTENSION = mapOf(
+            "mp4"  to "video/mp4",
+            "mkv"  to "video/x-matroska",
+            "webm" to "video/webm",
+            "avi"  to "video/x-msvideo",
+            "mov"  to "video/quicktime",
+            "3gp"  to "video/3gpp",
+            "ts"   to "video/mp2t",
+            "flv"  to "video/x-flv",
+        )
+
+        fun getMimeType(filename: String): String {
+            val ext = filename.substringAfterLast('.', "").lowercase(Locale.ROOT)
+            return MIME_BY_EXTENSION[ext]
+                ?: URLConnection.guessContentTypeFromName(filename)
+                ?: "video/mp4"
+        }
     }
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
@@ -71,7 +91,7 @@ class FletMediaScannerPlugin : FlutterPlugin, MethodCallHandler {
             ?.trim()
             ?.takeIf { it.isNotBlank() }
             ?: source.name
-        val mimeType = URLConnection.guessContentTypeFromName(displayName) ?: "video/mp4"
+        val mimeType = getMimeType(displayName)
         val relativePath = "${Environment.DIRECTORY_MOVIES}/$album"
         val resolver = context.contentResolver
         val collection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -228,7 +248,7 @@ class FletMediaScannerPlugin : FlutterPlugin, MethodCallHandler {
                         mapOf(
                             "content_uri" to uri.toString(),
                             "display_name" to displayName,
-                            "mime_type" to (cursor.getString(mimeIndex) ?: "video/mp4"),
+                            "mime_type" to (cursor.getString(mimeIndex) ?: getMimeType(displayName)),
                             "relative_path" to relativePath.trimEnd('/'),
                             "size" to cursor.getLong(sizeIndex),
                             "date_added" to cursor.getLong(addedIndex),

@@ -23,6 +23,7 @@ class MediaScanner(ft.Service):
     """
     Android media service for publishing videos through MediaStore.
 
+    Supports MP4, MKV (Matroska), WebM, and other common video formats.
     New downloads should use save_video(). scan_media() is kept only for
     legacy files that already exist in public storage and need Gallery indexing.
     """
@@ -38,6 +39,9 @@ class MediaScanner(ft.Service):
     ) -> SaveResult:
         """
         Copy an app-private video into Android MediaStore.Video.
+
+        Supports MP4, MKV (.mkv), WebM (.webm), and other common video formats.
+        MIME type is resolved automatically from the file extension.
 
         On Android 10+ this publishes to Movies/<album> without requiring
         broad storage permissions or a media scan.
