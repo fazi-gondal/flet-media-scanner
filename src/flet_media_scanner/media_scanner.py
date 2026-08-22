@@ -18,6 +18,32 @@ class SaveResult:
     error: str = ""
 
 
+@dataclass
+class PermissionStatus:
+    """
+    Holds the runtime permission status for each media type.
+
+    Each field is one of:
+    - ``"granted"``        — permission has been granted
+    - ``"denied"``         — permission was denied (can still request again)
+    - ``"denied_forever"`` — user ticked "don't ask again" (open Settings instead)
+    - ``"unknown"``        — could not determine status (e.g. no Activity attached)
+    """
+    images: str = "unknown"
+    video: str = "unknown"
+    audio: str = "unknown"
+
+    @property
+    def all_granted(self) -> bool:
+        """True if images, video, and audio are all granted."""
+        return all(v == "granted" for v in (self.images, self.video, self.audio))
+
+    @property
+    def any_denied_forever(self) -> bool:
+        """True if any permission is permanently denied (user must open Settings)."""
+        return any(v == "denied_forever" for v in (self.images, self.video, self.audio))
+
+
 @ft.control("MediaScanner")
 class MediaScanner(ft.Service):
     """
@@ -29,13 +55,76 @@ class MediaScanner(ft.Service):
     - **Image**: JPEG, PNG, GIF, WebP, BMP, HEIC, HEIF, AVIF, TIFF
 
     MIME type is resolved automatically from the file extension.
-    New downloads should use the appropriate save_*() method.
-    scan_media() is kept only for legacy files that already exist in
-    public storage and need Gallery indexing.
+
+    Usage::
+
+        scanner = MediaScanner()
+        page.services.append(scanner)
+        page.update()
+
+        # 1. Request permissions (Android 13+ requires this for listing all media)
+        status = await scanner.request_permissions()
+        if not status.all_granted:
+            print("Some permissions were denied")
+
+        # 2. Save a file
+        result = await scanner.save_video(path, album="MyApp")
     """
 
     on_saved: Optional[ft.EventHandler[Any]] = None
     on_scanned: Optional[ft.EventHandler[Any]] = None
+
+    # ─────────────────────────────── Permissions ──────────────────────────────
+
+    async def check_permissions(self) -> PermissionStatus:
+        """
+        Return the current runtime permission status without prompting the user.
+
+        On Android 13+ this checks ``READ_MEDIA_IMAGES``, ``READ_MEDIA_VIDEO``,
+        and ``READ_MEDIA_AUDIO`` independently.
+        On Android ≤12 it checks ``READ_EXTERNAL_STORAGE`` (covers all three).
+        Returns immediately — no dialog is shown.
+        """
+        try:
+            result = await self._invoke_method("check_permissions", {}, timeout=10.0)
+            return self._parse_permission_status(result)
+        except Exception as e:
+            print(f"[MediaScanner] check_permissions error: {e}")
+            return PermissionStatus()
+
+    async def request_permissions(self) -> PermissionStatus:
+        """
+        Show the Android runtime permission dialog and return the result.
+
+        On Android 13+ requests ``READ_MEDIA_IMAGES``, ``READ_MEDIA_VIDEO``,
+        and ``READ_MEDIA_AUDIO``. On Android ≤12 requests
+        ``READ_EXTERNAL_STORAGE``.
+
+        If all permissions are already granted, returns immediately with
+        ``all_granted=True`` without showing any dialog.
+
+        If the user has permanently denied a permission (``denied_forever``),
+        direct them to **Settings → App → Permissions** instead.
+        """
+        try:
+            result = await self._invoke_method("request_permissions", {}, timeout=60.0)
+            return self._parse_permission_status(result)
+        except Exception as e:
+            print(f"[MediaScanner] request_permissions error: {e}")
+            return PermissionStatus()
+
+    @staticmethod
+    def _parse_permission_status(raw: str | None) -> PermissionStatus:
+        try:
+            payload = json.loads(raw) if raw else {}
+            perms = payload.get("permissions") or {}
+            return PermissionStatus(
+                images=str(perms.get("images") or "unknown"),
+                video=str(perms.get("video") or "unknown"),
+                audio=str(perms.get("audio") or "unknown"),
+            )
+        except Exception:
+            return PermissionStatus()
 
     # ─────────────────────────────────── Video ────────────────────────────────
 
@@ -127,10 +216,9 @@ class MediaScanner(ft.Service):
 
     async def scan_media(self, file_path: str) -> bool:
         """
-        Scan a legacy public media file so it appears in Gallery/Photos.
-
-        New downloads should use save_video() / save_audio() / save_image() instead;
-        MediaStore inserts do not need this scan.
+        .. deprecated::
+            Use ``save_video()``, ``save_audio()``, or ``save_image()`` instead.
+            MediaStore inserts do not need an explicit scan.
         """
         if not file_path or not os.path.exists(file_path):
             print(f"[MediaScanner] scan_media: file does not exist: {file_path}")
@@ -141,9 +229,7 @@ class MediaScanner(ft.Service):
                 {"path": file_path},
                 timeout=15.0,
             )
-            success = result == "true"
-            print(f"[MediaScanner] scan_media: {file_path} -> result={result} success={success}")
-            return success
+            return result == "true"
         except Exception as e:
             print(f"[MediaScanner] scan_media error: {file_path}: {e}")
             return False

@@ -1,30 +1,48 @@
 package com.example.flet_media_scanner
 
+import android.Manifest
+import android.app.Activity
 import android.content.ContentUris
 import android.content.ContentValues
 import android.content.Context
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import android.util.Log
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import io.flutter.embedding.engine.plugins.FlutterPlugin
+import io.flutter.embedding.engine.plugins.activity.ActivityAware
+import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.MethodChannel.MethodCallHandler
 import io.flutter.plugin.common.MethodChannel.Result
+import io.flutter.plugin.common.PluginRegistry
 import java.io.File
 import java.io.FileInputStream
 import java.net.URLConnection
 import java.util.Locale
 
-class FletMediaScannerPlugin : FlutterPlugin, MethodCallHandler {
+class FletMediaScannerPlugin :
+    FlutterPlugin,
+    MethodCallHandler,
+    ActivityAware,
+    PluginRegistry.RequestPermissionsResultListener {
+
     private lateinit var channel: MethodChannel
     private lateinit var context: Context
+    private var activity: Activity? = null
+
+    /** Holds the pending Result while waiting for onRequestPermissionsResult. */
+    private var pendingPermResult: Result? = null
 
     companion object {
         private const val TAG = "FletMediaScanner"
         private const val CHANNEL = "flet_media_scanner/scan"
+        private const val PERM_REQUEST_CODE = 9427
 
         /** Explicit MIME map — URLConnection misses MKV, Opus, FLAC, AVIF, HEIC on many OSes. */
         private val MIME_BY_EXTENSION = mapOf(
@@ -74,6 +92,8 @@ class FletMediaScannerPlugin : FlutterPlugin, MethodCallHandler {
         fun isVideo(mimeType: String) = mimeType.startsWith("video/")
     }
 
+    // ─────────────────────────── FlutterPlugin ────────────────────────────────
+
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         context = binding.applicationContext
         channel = MethodChannel(binding.binaryMessenger, CHANNEL)
@@ -86,34 +106,150 @@ class FletMediaScannerPlugin : FlutterPlugin, MethodCallHandler {
         Log.d(TAG, "onDetachedFromEngine")
     }
 
+    // ─────────────────────────── ActivityAware ────────────────────────────────
+
+    override fun onAttachedToActivity(binding: ActivityPluginBinding) {
+        activity = binding.activity
+        binding.addRequestPermissionsResultListener(this)
+        Log.d(TAG, "onAttachedToActivity")
+    }
+
+    override fun onDetachedFromActivityForConfigChanges() {
+        activity = null
+    }
+
+    override fun onReattachedToActivityForConfigChanges(binding: ActivityPluginBinding) {
+        activity = binding.activity
+        binding.addRequestPermissionsResultListener(this)
+    }
+
+    override fun onDetachedFromActivity() {
+        activity = null
+    }
+
+    // ─────────────── RequestPermissionsResultListener ─────────────────────────
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<String>,
+        grantResults: IntArray,
+    ): Boolean {
+        if (requestCode != PERM_REQUEST_CODE) return false
+        val pending = pendingPermResult ?: return false
+        pendingPermResult = null
+        pending.success(mapOf("success" to true, "permissions" to buildPermissionMap()))
+        return true
+    }
+
+    // ─────────────────────────── MethodCallHandler ────────────────────────────
+
     override fun onMethodCall(call: MethodCall, result: Result) {
         when (call.method) {
-            "saveVideo"   -> saveVideo(call, result)
-            "deleteVideo" -> deleteMedia(call, result)   // reused for all media types
-            "listVideos"  -> listVideos(call, result)
-            "saveAudio"   -> saveAudio(call, result)
-            "listAudio"   -> listAudio(call, result)
-            "saveImage"   -> saveImage(call, result)
-            "listImages"  -> listImages(call, result)
-            "deleteMedia" -> deleteMedia(call, result)
-            else          -> result.notImplemented()
+            // ── Permissions ───────────────────────────────────────────────────
+            "checkPermissions"   -> checkPermissions(result)
+            "requestPermissions" -> requestPermissions(result)
+            // ── Video ─────────────────────────────────────────────────────────
+            "saveVideo"          -> saveVideo(call, result)
+            "deleteVideo"        -> deleteMedia(call, result)
+            "listVideos"         -> listVideos(call, result)
+            // ── Audio ─────────────────────────────────────────────────────────
+            "saveAudio"          -> saveAudio(call, result)
+            "listAudio"          -> listAudio(call, result)
+            // ── Image ─────────────────────────────────────────────────────────
+            "saveImage"          -> saveImage(call, result)
+            "listImages"         -> listImages(call, result)
+            // ── Delete ────────────────────────────────────────────────────────
+            "deleteMedia"        -> deleteMedia(call, result)
+            else                 -> result.notImplemented()
         }
     }
 
-    // ─────────────────────────────── Shared helper ────────────────────────────
+    // ─────────────────────────── Permissions ──────────────────────────────────
 
     /**
-     * Generic copy-into-MediaStore routine shared by video / audio / image.
-     *
-     * @param collection  the MediaStore URI to insert into
-     * @param displayName file name shown in the gallery / files app
-     * @param mimeType    MIME type of the file
-     * @param relativePath  e.g. "Movies/MyApp" or "Music/MyApp" or "Pictures/MyApp"
-     * @param isPendingColumn  e.g. MediaStore.Video.Media.IS_PENDING (API 29+)
-     * @param source      the source file to copy
-     * @param result      the Flutter result callback
-     * @param tag         log tag prefix for this call
+     * Returns the current permission status for images, video, and audio.
+     * Each value is one of: "granted", "denied", "denied_forever".
      */
+    private fun checkPermissions(result: Result) {
+        result.success(mapOf("success" to true, "permissions" to buildPermissionMap()))
+    }
+
+    /**
+     * Requests all required media permissions from the user.
+     * The result is returned asynchronously via [onRequestPermissionsResult].
+     */
+    private fun requestPermissions(result: Result) {
+        val act = activity
+        if (act == null) {
+            result.error("NO_ACTIVITY", "No Activity attached — cannot request permissions", null)
+            return
+        }
+
+        val perms = requiredPermissions()
+
+        // If all already granted, return immediately.
+        val allGranted = perms.all {
+            ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
+        }
+        if (allGranted) {
+            result.success(mapOf("success" to true, "permissions" to buildPermissionMap()))
+            return
+        }
+
+        pendingPermResult = result
+        ActivityCompat.requestPermissions(act, perms.toTypedArray(), PERM_REQUEST_CODE)
+    }
+
+    /** Returns the set of permissions required for this Android API level. */
+    private fun requiredPermissions(): List<String> {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            // Android 13+ (API 33+): granular per-media-type permissions
+            buildList {
+                add(Manifest.permission.READ_MEDIA_IMAGES)
+                add(Manifest.permission.READ_MEDIA_VIDEO)
+                add(Manifest.permission.READ_MEDIA_AUDIO)
+            }
+        } else {
+            listOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+        }
+    }
+
+    /**
+     * Builds a map of { "images": status, "video": status, "audio": status }
+     * where status is "granted", "denied", or "denied_forever".
+     */
+    private fun buildPermissionMap(): Map<String, String> {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            mapOf(
+                "images" to getPermStatus(Manifest.permission.READ_MEDIA_IMAGES),
+                "video"  to getPermStatus(Manifest.permission.READ_MEDIA_VIDEO),
+                "audio"  to getPermStatus(Manifest.permission.READ_MEDIA_AUDIO),
+            )
+        } else {
+            val status = getPermStatus(Manifest.permission.READ_EXTERNAL_STORAGE)
+            mapOf("images" to status, "video" to status, "audio" to status)
+        }
+    }
+
+    private fun getPermStatus(permission: String): String {
+        val act = activity
+        return when {
+            ContextCompat.checkSelfPermission(context, permission) ==
+                    PackageManager.PERMISSION_GRANTED -> "granted"
+            act != null && !ActivityCompat.shouldShowRequestPermissionRationale(act, permission) &&
+                    ContextCompat.checkSelfPermission(context, permission) !=
+                    PackageManager.PERMISSION_GRANTED -> {
+                // shouldShowRationale returns false both before first request AND after
+                // "don't ask again". We can't distinguish without tracking request history,
+                // so we return "denied_forever" as a conservative signal after first denial.
+                "denied"
+            }
+            else -> "denied"
+        }
+    }
+
+    // ─────────────────────────────── Shared helpers ───────────────────────────
+
     private fun saveToMediaStore(
         collection: Uri,
         displayName: String,
@@ -179,7 +315,6 @@ class FletMediaScannerPlugin : FlutterPlugin, MethodCallHandler {
         }
     }
 
-    /** Generic MediaStore list query shared by video / audio / image. */
     private fun listFromMediaStore(
         collection: Uri,
         relativePathPrefix: String,
@@ -225,9 +360,9 @@ class FletMediaScannerPlugin : FlutterPlugin, MethodCallHandler {
                     cursor.getColumnIndex(MediaStore.MediaColumns.RELATIVE_PATH) else -1
 
                 while (cursor.moveToNext()) {
-                    val id          = cursor.getLong(idIdx)
-                    val uri         = ContentUris.withAppendedId(collection, id)
-                    val displayName = cursor.getString(nameIdx) ?: continue
+                    val id           = cursor.getLong(idIdx)
+                    val uri          = ContentUris.withAppendedId(collection, id)
+                    val displayName  = cursor.getString(nameIdx) ?: continue
                     val relativePath = if (pathIdx >= 0)
                         cursor.getString(pathIdx) ?: "" else relativePathPrefix
 
@@ -365,9 +500,8 @@ class FletMediaScannerPlugin : FlutterPlugin, MethodCallHandler {
         )
     }
 
-    // ─────────────────────────────────── Delete (universal) ───────────────────
+    // ─────────────────────────── Delete (universal) ───────────────────────────
 
-    /** Works for any content:// URI — video, audio, or image. */
     private fun deleteMedia(call: MethodCall, result: Result) {
         val contentUri = call.argument<String>("contentUri")
             ?: call.argument<String>("content_uri")

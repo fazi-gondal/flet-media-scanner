@@ -1,2 +1,23 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+        Android 6–12: broad external storage read permission.
+        maxSdkVersion=32 prevents it appearing in the permission dialog on API 33+.
+    -->
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+
+    <!-- Android 13+ (API 33+): granular media permissions -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+
+    <!--
+        Android 14+ (API 34+): allows access to user-selected photos/videos only
+        (partial access via Photo Picker). Declare alongside READ_MEDIA_* to
+        handle the "selected photos" grant on API 34+.
+    -->
+    <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED" />
+
 </manifest>

@@ -25,21 +25,24 @@ class MediaScannerService extends FletService {
         "MediaScannerService._onInvokeMethod: $methodName args=$arguments");
 
     return switch (methodName) {
+      // ── Permissions ───────────────────────────────────────────────────────
+      "check_permissions"   => await _invokeChannel("checkPermissions", {}),
+      "request_permissions" => await _invokeChannel("requestPermissions", {}),
       // ── Video ─────────────────────────────────────────────────────────────
-      "save_video"   => await _invokeChannel("saveVideo", arguments),
-      "delete_video" => await _invokeDeleteChannel(arguments),
-      "list_videos"  => await _invokeChannel("listVideos", arguments),
+      "save_video"          => await _invokeChannel("saveVideo", arguments),
+      "delete_video"        => await _invokeDeleteChannel(arguments),
+      "list_videos"         => await _invokeChannel("listVideos", arguments),
       // ── Audio ─────────────────────────────────────────────────────────────
-      "save_audio"   => await _invokeChannel("saveAudio", arguments),
-      "list_audio"   => await _invokeChannel("listAudio", arguments),
+      "save_audio"          => await _invokeChannel("saveAudio", arguments),
+      "list_audio"          => await _invokeChannel("listAudio", arguments),
       // ── Image ─────────────────────────────────────────────────────────────
-      "save_image"   => await _invokeChannel("saveImage", arguments),
-      "list_images"  => await _invokeChannel("listImages", arguments),
+      "save_image"          => await _invokeChannel("saveImage", arguments),
+      "list_images"         => await _invokeChannel("listImages", arguments),
       // ── Delete (universal) ────────────────────────────────────────────────
-      "delete_media" => await _invokeDeleteChannel(arguments),
+      "delete_media"        => await _invokeDeleteChannel(arguments),
       // ── Legacy scan ───────────────────────────────────────────────────────
-      "scan_media"   => await _scanMedia(arguments),
-      _              => throw Exception(
+      "scan_media"          => await _scanMedia(arguments),
+      _                     => throw Exception(
           "MediaScannerService: unknown method '$methodName'"),
     };
   }
@@ -51,7 +54,6 @@ class MediaScannerService extends FletService {
       final result = await _channel
           .invokeMethod<Map<dynamic, dynamic>>(kotlinMethod, _toKotlinArgs(args));
       final payload = Map<String, dynamic>.from(result ?? {});
-      // Fire saved/deleted events if the Kotlin method name hints at it
       if (kotlinMethod.startsWith("save")) {
         control.triggerEvent("saved", payload);
       }
@@ -96,12 +98,11 @@ class MediaScannerService extends FletService {
     }
   }
 
-  /// Legacy scan_media — no longer calls the removed media_scanner package;
-  /// now always returns false (users should use save_video/save_audio/save_image).
+  /// Deprecated — use save_video/save_audio/save_image instead.
   Future<String> _scanMedia(Map<String, dynamic> args) async {
     final String path = args["path"] as String? ?? "";
     debugPrint(
-        "MediaScannerService._scanMedia: deprecated — use save_* methods instead. path='$path'");
+        "MediaScannerService._scanMedia: deprecated — use save_* methods. path='$path'");
     control.triggerEvent("scanned", {
       "path": path,
       "success": "false",
@@ -110,7 +111,6 @@ class MediaScannerService extends FletService {
     return "false";
   }
 
-  /// Maps Python snake_case arg keys to Kotlin camelCase where needed.
   Map<String, dynamic> _toKotlinArgs(Map<String, dynamic> args) {
     return {
       if (args.containsKey("path")) "path": args["path"],
