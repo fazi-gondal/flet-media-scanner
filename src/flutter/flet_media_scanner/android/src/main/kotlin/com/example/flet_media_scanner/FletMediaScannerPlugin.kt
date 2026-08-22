@@ -135,6 +135,8 @@ class FletMediaScannerPlugin :
             "checkPermissions"   -> checkPermissions(result)
             "requestPermissions" -> requestPermissions(result)
             "getAssets"          -> getAssets(call, result)
+            "getAlbums"          -> getAlbums(call, result)
+            "deleteAlbum"        -> deleteAlbum(call, result)
             "saveVideo"          -> saveVideo(call, result)
             "deleteVideo"        -> deleteMedia(call, result)
             "listVideos"         -> listVideos(call, result)
@@ -194,6 +196,172 @@ class FletMediaScannerPlugin :
     private fun getPermStatus(permission: String): String =
         if (ContextCompat.checkSelfPermission(context, permission) ==
             PackageManager.PERMISSION_GRANTED) "granted" else "denied"
+
+    // ─────────────────────────── Album management ─────────────────────────────
+
+    /**
+     * Group all MediaStore items by RELATIVE_PATH and return one AlbumInfo per folder.
+     *
+     * Arguments:
+     *   mediaType  "all" | "video" | "audio" | "image"  (default "all")
+     */
+    private fun getAlbums(call: MethodCall, result: Result) {
+        val mediaType = (call.argument<String>("mediaType") ?: "all").lowercase(Locale.ROOT)
+
+        data class Spec(val uri: Uri, val type: String)
+        val specs = when (mediaType) {
+            "video" -> listOf(Spec(videoCollection(), "video"))
+            "audio" -> listOf(Spec(audioCollection(), "audio"))
+            "image" -> listOf(Spec(imageCollection(), "image"))
+            else    -> listOf(
+                Spec(videoCollection(), "video"),
+                Spec(audioCollection(), "audio"),
+                Spec(imageCollection(), "image"),
+            )
+        }
+
+        // key = relative_path (trimmed), value = mutable album row
+        val albumMap = linkedMapOf<String, MutableMap<String, Any?>>()
+
+        try {
+            for (spec in specs) {
+                collectAlbums(spec.uri, spec.type, albumMap)
+            }
+
+            val albums = albumMap.values
+                .sortedByDescending { (it["count"] as? Int) ?: 0 }
+
+            result.success(mapOf("success" to true, "albums" to albums))
+        } catch (e: Exception) {
+            Log.e(TAG, "getAlbums: ${e.message}", e)
+            result.error("QUERY_ERROR", e.message, e.toString())
+        }
+    }
+
+    /**
+     * Scan one collection and populate [albumMap] with grouped album data.
+     * The album [cover_uri] is the most-recently-added item in each folder.
+     * Requires API 29+ for RELATIVE_PATH; no-ops on older devices.
+     */
+    private fun collectAlbums(
+        collection: Uri,
+        mediaType: String,
+        albumMap: LinkedHashMap<String, MutableMap<String, Any?>>,
+    ) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
+
+        val projection = arrayOf(
+            MediaStore.MediaColumns._ID,
+            MediaStore.MediaColumns.RELATIVE_PATH,
+            MediaStore.MediaColumns.DISPLAY_NAME,
+            MediaStore.MediaColumns.DATE_ADDED,
+        )
+
+        context.contentResolver.query(
+            collection,
+            projection,
+            null, null,
+            "${MediaStore.MediaColumns.DATE_ADDED} DESC",
+        )?.use { cursor ->
+            val idIdx   = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
+            val pathIdx = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.RELATIVE_PATH)
+
+            while (cursor.moveToNext()) {
+                val rawPath = cursor.getString(pathIdx) ?: continue
+                val trimmed = rawPath.trimEnd('/')
+                val albumName = trimmed.substringAfterLast('/')
+                if (albumName.isBlank()) continue   // skip root-level files
+
+                val existing = albumMap[trimmed]
+                if (existing == null) {
+                    val id  = cursor.getLong(idIdx)
+                    val uri = ContentUris.withAppendedId(collection, id)
+                    albumMap[trimmed] = mutableMapOf(
+                        "name"          to albumName,
+                        "relative_path" to trimmed,
+                        "count"         to 1,
+                        "cover_uri"     to uri.toString(),
+                        "media_type"    to mediaType,
+                    )
+                } else {
+                    existing["count"] = (existing["count"] as Int) + 1
+                    // cover_uri stays as the first (most-recent) item seen
+                }
+            }
+        }
+    }
+
+    /**
+     * Delete every MediaStore item whose RELATIVE_PATH starts with [relativePath].
+     *
+     * Arguments:
+     *   relativePath  e.g. "Movies/MyApp" (as returned by get_albums)
+     *   mediaType     "all" | "video" | "audio" | "image"  (default "all")
+     *
+     * Returns { success, deleted_count, relative_path }.
+     */
+    private fun deleteAlbum(call: MethodCall, result: Result) {
+        val relativePath = call.argument<String>("relativePath")
+            ?.trim()?.trim('/')
+            ?.takeIf { it.isNotBlank() }
+        val mediaType = (call.argument<String>("mediaType") ?: "all").lowercase(Locale.ROOT)
+
+        if (relativePath == null) {
+            result.error("INVALID_ARGUMENT", "relativePath is required", null)
+            return
+        }
+
+        data class Spec(val uri: Uri)
+        val specs = when (mediaType) {
+            "video" -> listOf(Spec(videoCollection()))
+            "audio" -> listOf(Spec(audioCollection()))
+            "image" -> listOf(Spec(imageCollection()))
+            else    -> listOf(Spec(videoCollection()), Spec(audioCollection()), Spec(imageCollection()))
+        }
+
+        try {
+            var total = 0
+            val resolver = context.contentResolver
+
+            for (spec in specs) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    // API 29+: batch delete via WHERE clause
+                    total += resolver.delete(
+                        spec.uri,
+                        "${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ?",
+                        arrayOf("$relativePath/"),
+                    )
+                } else {
+                    // API < 29: iterate and delete individually
+                    val ids = mutableListOf<Long>()
+                    resolver.query(
+                        spec.uri,
+                        arrayOf(MediaStore.MediaColumns._ID),
+                        null, null, null,
+                    )?.use { cursor ->
+                        val idIdx = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
+                        while (cursor.moveToNext()) {
+                            ids += cursor.getLong(idIdx)
+                        }
+                    }
+                    for (id in ids) {
+                        val uri = ContentUris.withAppendedId(spec.uri, id)
+                        try { total += resolver.delete(uri, null, null) }
+                        catch (e: Exception) { Log.w(TAG, "deleteAlbum: could not delete $uri: ${e.message}") }
+                    }
+                }
+            }
+
+            result.success(mapOf(
+                "success"       to true,
+                "deleted_count" to total,
+                "relative_path" to relativePath,
+            ))
+        } catch (e: Exception) {
+            Log.e(TAG, "deleteAlbum: ${e.message}", e)
+            result.error("DELETE_ERROR", e.message, e.toString())
+        }
+    }
 
     // ─────────────────────────── get_assets (generic query) ───────────────────
 

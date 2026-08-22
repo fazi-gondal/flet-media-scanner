@@ -30,6 +30,9 @@ class MediaScannerService extends FletService {
       "request_permissions" => await _invokeChannel("requestPermissions", {}),
       // ── Generic query ─────────────────────────────────────────────────────
       "get_assets"          => await _invokeChannel("getAssets", arguments),
+      // ── Album management ──────────────────────────────────────────────────
+      "get_albums"          => await _invokeChannel("getAlbums", arguments),
+      "delete_album"        => await _invokeChannel("deleteAlbum", arguments),
       // ── Video ─────────────────────────────────────────────────────────────
       "save_video"          => await _invokeChannel("saveVideo", arguments),
       "delete_video"        => await _invokeDeleteChannel(arguments),

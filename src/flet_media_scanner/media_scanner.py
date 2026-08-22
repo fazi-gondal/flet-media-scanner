@@ -40,6 +40,23 @@ class MediaAsset:
 
 
 @dataclass
+class AlbumInfo:
+    """
+    Represents a single album (sub-folder) in the MediaStore.
+
+    ``cover_uri`` is the ``content://`` URI of the most recently added item
+    in the album — useful as a thumbnail source for album grid views.
+    Requires Android 10+ (API 29); on older devices ``get_albums()`` returns
+    an empty list.
+    """
+    name: str = ""           # e.g. "MyApp"
+    relative_path: str = "" # e.g. "Movies/MyApp"
+    count: int = 0
+    cover_uri: str = ""
+    media_type: str = ""    # "video" | "audio" | "image"
+
+
+@dataclass
 class PermissionStatus:
     """
     Holds the runtime permission status for each media type.
@@ -223,6 +240,91 @@ class MediaScanner(ft.Service):
         except Exception as e:
             print(f"[MediaScanner] get_assets error: {e}")
             return [], 0
+
+    # ───────────────────────────────── Albums ──────────────────────────────────
+
+    async def get_albums(
+        self,
+        media_type: str = "all",
+    ) -> list[AlbumInfo]:
+        """
+        Return all media albums found in the MediaStore, grouped by folder.
+
+        Each album corresponds to a ``RELATIVE_PATH`` sub-folder such as
+        ``Movies/MyApp`` or ``Pictures/Camera``.
+
+        Parameters
+        ----------
+        media_type : str
+            ``"all"`` (default), ``"video"``, ``"audio"``, or ``"image"``.
+
+        Returns
+        -------
+        list[AlbumInfo]
+            Albums sorted by item count (largest first).
+            Returns an empty list on Android < 10 (API 29).
+        """
+        try:
+            raw = await self._invoke_method(
+                "get_albums",
+                {"mediaType": media_type},
+                timeout=20.0,
+            )
+            payload = json.loads(raw) if raw else {}
+            return [
+                AlbumInfo(
+                    name=str(a.get("name") or ""),
+                    relative_path=str(a.get("relative_path") or ""),
+                    count=int(a.get("count") or 0),
+                    cover_uri=str(a.get("cover_uri") or ""),
+                    media_type=str(a.get("media_type") or ""),
+                )
+                for a in (payload.get("albums") or [])
+            ]
+        except Exception as e:
+            print(f"[MediaScanner] get_albums error: {e}")
+            return []
+
+    async def delete_album(
+        self,
+        relative_path: str,
+        media_type: str = "all",
+    ) -> int:
+        """
+        Delete all media items inside an album folder.
+
+        Pass the ``relative_path`` as returned by :meth:`get_albums`
+        (e.g. ``"Movies/MyApp"`` or ``"Pictures/Camera"``).
+
+        Parameters
+        ----------
+        relative_path : str
+            The MediaStore relative path of the album to wipe.
+        media_type : str
+            ``"all"`` (default), ``"video"``, ``"audio"``, or ``"image"``.
+            Restricts which MediaStore collection(s) are searched.
+
+        Returns
+        -------
+        int
+            Number of deleted items (0 if album was already empty or not found).
+        """
+        if not relative_path:
+            return 0
+        try:
+            raw = await self._invoke_method(
+                "delete_album",
+                {
+                    "relativePath": relative_path.strip("/"),
+                    "mediaType": media_type,
+                },
+                timeout=30.0,
+            )
+            payload = json.loads(raw) if raw else {}
+            return int(payload.get("deleted_count") or 0)
+        except Exception as e:
+            print(f"[MediaScanner] delete_album error: {e}")
+            return 0
 
     # ─────────────────────────────────── Video ────────────────────────────────
 
