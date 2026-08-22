@@ -1,6 +1,6 @@
 [project]
 name = "flet-media-scanner"
-version = "0.86.4"
+version = "0.86.5"
 description = "Flet extension for Android MediaStore — save, list, and delete videos, audio, and images"
 readme = "README.md"
 license = { text = "MIT" }
