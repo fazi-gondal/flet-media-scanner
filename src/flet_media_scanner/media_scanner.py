@@ -21,40 +21,150 @@ class SaveResult:
 @ft.control("MediaScanner")
 class MediaScanner(ft.Service):
     """
-    Android media service for publishing videos through MediaStore.
+    Android media service for publishing files through MediaStore.
 
-    Supports MP4, MKV (Matroska), WebM, and other common video formats.
-    New downloads should use save_video(). scan_media() is kept only for
-    legacy files that already exist in public storage and need Gallery indexing.
+    Supports:
+    - **Video**: MP4, MKV, WebM, AVI, MOV, 3GP, TS, FLV
+    - **Audio**: MP3, M4A, AAC, FLAC, Opus, WAV, OGG, WMA
+    - **Image**: JPEG, PNG, GIF, WebP, BMP, HEIC, HEIF, AVIF, TIFF
+
+    MIME type is resolved automatically from the file extension.
+    New downloads should use the appropriate save_*() method.
+    scan_media() is kept only for legacy files that already exist in
+    public storage and need Gallery indexing.
     """
 
     on_saved: Optional[ft.EventHandler[Any]] = None
     on_scanned: Optional[ft.EventHandler[Any]] = None
 
+    # ─────────────────────────────────── Video ────────────────────────────────
+
     async def save_video(
         self,
         file_path: str,
         file_name: str | None = None,
-        album: str = "Vidsaver",
+        album: str = "MyApp",
     ) -> SaveResult:
         """
-        Copy an app-private video into Android MediaStore.Video.
+        Copy an app-private video file into Android MediaStore (Movies/<album>).
 
-        Supports MP4, MKV (.mkv), WebM (.webm), and other common video formats.
+        Supported: MP4, MKV (.mkv), WebM (.webm), AVI, MOV, 3GP, TS, FLV.
         MIME type is resolved automatically from the file extension.
 
-        On Android 10+ this publishes to Movies/<album> without requiring
-        broad storage permissions or a media scan.
+        On Android 10+ this publishes without requiring broad storage permissions.
         """
-        if not file_path or not os.path.exists(file_path):
-            return SaveResult(error=f"file does not exist: {file_path}")
+        return await self._save_media("save_video", file_path, file_name, album)
 
+    async def list_videos(self, album: str = "MyApp") -> list[dict]:
+        """List videos previously saved to the MediaStore album (Movies/<album>)."""
+        return await self._list_media("list_videos", "videos", album)
+
+    # ─────────────────────────────────── Audio ────────────────────────────────
+
+    async def save_audio(
+        self,
+        file_path: str,
+        file_name: str | None = None,
+        album: str = "MyApp",
+    ) -> SaveResult:
+        """
+        Copy an app-private audio file into Android MediaStore (Music/<album>).
+
+        Supported: MP3, M4A, AAC (.aac), FLAC, Opus (.opus), WAV, OGG, WMA.
+        MIME type is resolved automatically from the file extension.
+        """
+        return await self._save_media("save_audio", file_path, file_name, album)
+
+    async def list_audio(self, album: str = "MyApp") -> list[dict]:
+        """List audio files previously saved to the MediaStore album (Music/<album>)."""
+        return await self._list_media("list_audio", "audio", album)
+
+    # ─────────────────────────────────── Image ────────────────────────────────
+
+    async def save_image(
+        self,
+        file_path: str,
+        file_name: str | None = None,
+        album: str = "MyApp",
+    ) -> SaveResult:
+        """
+        Copy an app-private image file into Android MediaStore (Pictures/<album>).
+
+        Supported: JPEG, PNG, GIF, WebP, BMP, HEIC, HEIF, AVIF, TIFF, SVG.
+        MIME type is resolved automatically from the file extension.
+        """
+        return await self._save_media("save_image", file_path, file_name, album)
+
+    async def list_images(self, album: str = "MyApp") -> list[dict]:
+        """List images previously saved to the MediaStore album (Pictures/<album>)."""
+        return await self._list_media("list_images", "images", album)
+
+    # ─────────────────────────────────── Delete ───────────────────────────────
+
+    async def delete_media(self, content_uri: str) -> bool:
+        """
+        Delete any MediaStore item (video, audio, or image) by its content:// URI.
+        """
+        if not content_uri:
+            return False
         try:
             result = await self._invoke_method(
-                "save_video",
+                "delete_media",
+                {"contentUri": content_uri},
+                timeout=15.0,
+            )
+            payload = json.loads(result) if result else {}
+            return bool(payload.get("success"))
+        except Exception as e:
+            print(f"[MediaScanner] delete_media error: {content_uri}: {e}")
+            return False
+
+    async def delete_video(self, content_uri: str) -> bool:
+        """Delete a MediaStore video item by its content:// URI. Alias for delete_media()."""
+        return await self.delete_media(content_uri)
+
+    # ─────────────────────────────────── Legacy ───────────────────────────────
+
+    async def scan_media(self, file_path: str) -> bool:
+        """
+        Scan a legacy public media file so it appears in Gallery/Photos.
+
+        New downloads should use save_video() / save_audio() / save_image() instead;
+        MediaStore inserts do not need this scan.
+        """
+        if not file_path or not os.path.exists(file_path):
+            print(f"[MediaScanner] scan_media: file does not exist: {file_path}")
+            return False
+        try:
+            result = await self._invoke_method(
+                "scan_media",
+                {"path": file_path},
+                timeout=15.0,
+            )
+            success = result == "true"
+            print(f"[MediaScanner] scan_media: {file_path} -> result={result} success={success}")
+            return success
+        except Exception as e:
+            print(f"[MediaScanner] scan_media error: {file_path}: {e}")
+            return False
+
+    # ─────────────────────────────────── Internals ────────────────────────────
+
+    async def _save_media(
+        self,
+        method: str,
+        file_path: str,
+        file_name: str | None,
+        album: str,
+    ) -> SaveResult:
+        if not file_path or not os.path.exists(file_path):
+            return SaveResult(error=f"file does not exist: {file_path}")
+        try:
+            result = await self._invoke_method(
+                method,
                 {
                     "path": file_path,
-                    "file_name": file_name or os.path.basename(file_path),
+                    "fileName": file_name or os.path.basename(file_path),
                     "album": album,
                 },
                 timeout=60.0,
@@ -73,56 +183,16 @@ class MediaScanner(ft.Service):
         except Exception as e:
             return SaveResult(error=str(e), source_path=file_path)
 
-    async def scan_media(self, file_path: str) -> bool:
-        """
-        Scan a legacy public media file so it appears in Gallery/Photos.
-
-        New downloads should use save_video() instead; MediaStore inserts do
-        not need this scan.
-        """
-        if not file_path or not os.path.exists(file_path):
-            print(f"[MediaScanner] scan_media: file does not exist: {file_path}")
-            return False
+    async def _list_media(self, method: str, list_key: str, album: str) -> list[dict]:
         try:
             result = await self._invoke_method(
-                "scan_media",
-                {"path": file_path},
-                timeout=15.0,
-            )
-            success = result == "true"
-            print(f"[MediaScanner] scan_media: {file_path} -> result={result} success={success}")
-            return success
-        except Exception as e:
-            print(f"[MediaScanner] scan_media error: {file_path}: {e}")
-            return False
-
-    async def delete_video(self, content_uri: str) -> bool:
-        """Delete a MediaStore item by its content URI."""
-        if not content_uri:
-            return False
-        try:
-            result = await self._invoke_method(
-                "delete_video",
-                {"content_uri": content_uri},
-                timeout=15.0,
-            )
-            payload = json.loads(result) if result else {}
-            return bool(payload.get("success"))
-        except Exception as e:
-            print(f"[MediaScanner] delete_video error: {content_uri}: {e}")
-            return False
-
-    async def list_videos(self, album: str = "Vidsaver") -> list[dict]:
-        """List videos previously saved to the MediaStore album."""
-        try:
-            result = await self._invoke_method(
-                "list_videos",
+                method,
                 {"album": album},
                 timeout=15.0,
             )
             payload = json.loads(result) if result else {}
-            videos = payload.get("videos") or []
-            return videos if isinstance(videos, list) else []
+            items = payload.get(list_key) or []
+            return items if isinstance(items, list) else []
         except Exception as e:
-            print(f"[MediaScanner] list_videos error: {e}")
+            print(f"[MediaScanner] {method} error: {e}")
             return []

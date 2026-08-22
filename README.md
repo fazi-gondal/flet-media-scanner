@@ -1,8 +1,8 @@
 # flet-media-scanner
 
-A [Flet](https://flet.dev) extension for Android **MediaStore** integration — save, list, and delete videos in the device Gallery without requiring broad storage permissions.
+A [Flet](https://flet.dev) extension for Android **MediaStore** integration — save, list, and delete media files in the device Gallery / Music / Pictures without requiring broad storage permissions.
 
-Supports **MP4**, **MKV** (Matroska), **WebM**, and other common video containers. MIME type is resolved automatically from the file extension.
+Supports **video**, **audio**, and **image** files. MIME type is resolved automatically from the file extension.
 
 ## Requirements
 
@@ -12,16 +12,42 @@ Supports **MP4**, **MKV** (Matroska), **WebM**, and other common video container
 
 ## Supported Formats
 
-| Extension | MIME Type              |
-|-----------|------------------------|
-| `.mp4`    | `video/mp4`            |
-| `.mkv`    | `video/x-matroska`     |
-| `.webm`   | `video/webm`           |
-| `.avi`    | `video/x-msvideo`      |
-| `.mov`    | `video/quicktime`      |
-| `.3gp`    | `video/3gpp`           |
-| `.ts`     | `video/mp2t`           |
-| `.flv`    | `video/x-flv`          |
+### 🎬 Video
+| Extension | MIME Type              | Destination          |
+|-----------|------------------------|----------------------|
+| `.mp4`    | `video/mp4`            | `Movies/<album>/`    |
+| `.mkv`    | `video/x-matroska`     | `Movies/<album>/`    |
+| `.webm`   | `video/webm`           | `Movies/<album>/`    |
+| `.avi`    | `video/x-msvideo`      | `Movies/<album>/`    |
+| `.mov`    | `video/quicktime`      | `Movies/<album>/`    |
+| `.3gp`    | `video/3gpp`           | `Movies/<album>/`    |
+| `.ts`     | `video/mp2t`           | `Movies/<album>/`    |
+| `.flv`    | `video/x-flv`          | `Movies/<album>/`    |
+
+### 🎵 Audio
+| Extension | MIME Type              | Destination          |
+|-----------|------------------------|----------------------|
+| `.mp3`    | `audio/mpeg`           | `Music/<album>/`     |
+| `.m4a`    | `audio/mp4`            | `Music/<album>/`     |
+| `.aac`    | `audio/aac`            | `Music/<album>/`     |
+| `.flac`   | `audio/flac`           | `Music/<album>/`     |
+| `.opus`   | `audio/opus`           | `Music/<album>/`     |
+| `.wav`    | `audio/wav`            | `Music/<album>/`     |
+| `.ogg`    | `audio/ogg`            | `Music/<album>/`     |
+| `.wma`    | `audio/x-ms-wma`       | `Music/<album>/`     |
+
+### 🖼 Image
+| Extension      | MIME Type              | Destination            |
+|----------------|------------------------|------------------------|
+| `.jpg` / `.jpeg` | `image/jpeg`         | `Pictures/<album>/`    |
+| `.png`         | `image/png`            | `Pictures/<album>/`    |
+| `.gif`         | `image/gif`            | `Pictures/<album>/`    |
+| `.webp`        | `image/webp`           | `Pictures/<album>/`    |
+| `.bmp`         | `image/bmp`            | `Pictures/<album>/`    |
+| `.heic`        | `image/heic`           | `Pictures/<album>/`    |
+| `.heif`        | `image/heif`           | `Pictures/<album>/`    |
+| `.avif`        | `image/avif`           | `Pictures/<album>/`    |
+| `.tiff`        | `image/tiff`           | `Pictures/<album>/`    |
 
 ## Installation
 
@@ -49,24 +75,47 @@ async def main(page: ft.Page):
     page.services.append(scanner)
     page.update()
 
-    # Save a video to the Gallery (Movies/MyApp folder)
+    # ── Video ──────────────────────────────────────────────────────────────
     result: SaveResult = await scanner.save_video(
         "/data/user/0/com.example.app/cache/video.mp4",
         file_name="my_video.mp4",
         album="MyApp",
     )
     if result.success:
-        print(f"Saved: {result.content_uri}")
-    else:
-        print(f"Error: {result.error}")
+        print(f"Video saved: {result.content_uri}")
 
-    # List videos in the album
     videos = await scanner.list_videos(album="MyApp")
     for v in videos:
         print(v["display_name"], v["content_uri"])
 
-    # Delete a video by content URI
-    deleted = await scanner.delete_video("content://media/external/video/media/123")
+    # ── Audio ──────────────────────────────────────────────────────────────
+    result = await scanner.save_audio(
+        "/data/user/0/com.example.app/cache/song.mp3",
+        file_name="song.mp3",
+        album="MyApp",
+    )
+    if result.success:
+        print(f"Audio saved: {result.content_uri}")
+
+    tracks = await scanner.list_audio(album="MyApp")
+    for t in tracks:
+        print(t["display_name"], t["mime_type"])
+
+    # ── Image ──────────────────────────────────────────────────────────────
+    result = await scanner.save_image(
+        "/data/user/0/com.example.app/cache/photo.jpg",
+        file_name="photo.jpg",
+        album="MyApp",
+    )
+    if result.success:
+        print(f"Image saved: {result.content_uri}")
+
+    images = await scanner.list_images(album="MyApp")
+    for img in images:
+        print(img["display_name"], img["size"])
+
+    # ── Delete (works for any media type) ──────────────────────────────────
+    deleted = await scanner.delete_media("content://media/external/video/media/123")
     print("Deleted:", deleted)
 
 ft.run(main)
@@ -78,41 +127,84 @@ ft.run(main)
 
 Add to `page.services` before calling any methods.
 
-#### `await save_video(file_path, file_name=None, album="MyApp") → SaveResult`
+---
 
-Copies a private app file into Android MediaStore (`Movies/<album>`). Works on Android 10+ without broad storage permissions.
+#### Video
 
-| Parameter | Type | Description |
-|---|---|---|
-| `file_path` | `str` | Absolute path to the source video file |
-| `file_name` | `str \| None` | Display name in Gallery (defaults to basename) |
-| `album` | `str` | Subfolder inside `Movies/` |
+##### `await save_video(file_path, file_name=None, album="MyApp") → SaveResult`
 
-#### `await list_videos(album="MyApp") → list[dict]`
+Copies a private app video into `Movies/<album>` via Android MediaStore.
 
-Returns all videos previously saved to the album. Each dict contains: `display_name`, `content_uri`, `mime_type`, `relative_path`, `size`, `date_added`.
+##### `await list_videos(album="MyApp") → list[dict]`
 
-#### `await delete_video(content_uri) → bool`
+Returns all videos saved to the album.
 
-Deletes a MediaStore item by its `content://` URI.
+---
 
-#### `await scan_media(file_path) → bool`
+#### Audio
 
-*(Legacy)* Triggers a media scan for a file that already exists in public storage. Use `save_video()` for new downloads instead.
+##### `await save_audio(file_path, file_name=None, album="MyApp") → SaveResult`
+
+Copies a private app audio file into `Music/<album>` via Android MediaStore.
+
+##### `await list_audio(album="MyApp") → list[dict]`
+
+Returns all audio files saved to the album.
+
+---
+
+#### Image
+
+##### `await save_image(file_path, file_name=None, album="MyApp") → SaveResult`
+
+Copies a private app image into `Pictures/<album>` via Android MediaStore.
+
+##### `await list_images(album="MyApp") → list[dict]`
+
+Returns all images saved to the album.
+
+---
+
+#### Delete
+
+##### `await delete_media(content_uri) → bool`
+
+Deletes any MediaStore item (video, audio, or image) by its `content://` URI.
+
+##### `await delete_video(content_uri) → bool`
+
+Alias for `delete_media()`. Kept for backwards compatibility.
+
+---
+
+#### Common parameters for `save_*`
+
+| Parameter   | Type         | Description                                        |
+|-------------|--------------|----------------------------------------------------|
+| `file_path` | `str`        | Absolute path to the source file                   |
+| `file_name` | `str \| None` | Display name (defaults to the source file basename) |
+| `album`     | `str`        | Subfolder inside `Movies/`, `Music/`, or `Pictures/` |
 
 ---
 
 ### `SaveResult` (dataclass)
 
-| Field | Type | Description |
-|---|---|---|
-| `success` | `bool` | Whether the operation succeeded |
-| `content_uri` | `str` | MediaStore `content://` URI |
-| `display_name` | `str` | File name as shown in Gallery |
-| `mime_type` | `str` | e.g. `video/mp4` |
-| `relative_path` | `str` | e.g. `Movies/MyApp/` |
-| `size` | `int` | File size in bytes |
-| `error` | `str` | Error message if `success=False` |
+| Field           | Type   | Description                              |
+|-----------------|--------|------------------------------------------|
+| `success`       | `bool` | Whether the operation succeeded           |
+| `content_uri`   | `str`  | MediaStore `content://` URI               |
+| `display_name`  | `str`  | File name as shown in the gallery/app     |
+| `mime_type`     | `str`  | e.g. `video/mp4`, `audio/mpeg`, `image/jpeg` |
+| `relative_path` | `str`  | e.g. `Movies/MyApp/`                      |
+| `source_path`   | `str`  | Original source file path                 |
+| `size`          | `int`  | File size in bytes                        |
+| `error`         | `str`  | Error message if `success=False`          |
+
+---
+
+### List item fields (`list_videos`, `list_audio`, `list_images`)
+
+Each dict contains: `content_uri`, `display_name`, `mime_type`, `relative_path`, `size`, `date_added`, `date_modified`.
 
 ## License
 

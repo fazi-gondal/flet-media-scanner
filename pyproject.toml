@@ -1,14 +1,14 @@
 [project]
 name = "flet-media-scanner"
-version = "0.86.2"
-description = "Flet extension for Android MediaStore — scan, save, list, and delete videos in the Gallery"
+version = "0.86.3"
+description = "Flet extension for Android MediaStore — save, list, and delete videos, audio, and images"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.12"
 authors = [
     { name = "Fazi-Gondal", email = "nextinpk@gmail.com" }
 ]
-keywords = ["flet", "android", "media", "mediascanner", "gallery", "flutter"]
+keywords = ["flet", "android", "media", "mediascanner", "gallery", "flutter", "audio", "image", "video", "mkv", "webm", "mp3", "flac"]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",

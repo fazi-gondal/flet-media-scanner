@@ -26,8 +26,9 @@ class FletMediaScannerPlugin : FlutterPlugin, MethodCallHandler {
         private const val TAG = "FletMediaScanner"
         private const val CHANNEL = "flet_media_scanner/scan"
 
-        /** MIME types by extension — extends URLConnection which misses MKV/WebM on some OSes. */
+        /** Explicit MIME map — URLConnection misses MKV, Opus, FLAC, AVIF, HEIC on many OSes. */
         private val MIME_BY_EXTENSION = mapOf(
+            // ── Video ──────────────────────────────────────────────────────────
             "mp4"  to "video/mp4",
             "mkv"  to "video/x-matroska",
             "webm" to "video/webm",
@@ -36,14 +37,41 @@ class FletMediaScannerPlugin : FlutterPlugin, MethodCallHandler {
             "3gp"  to "video/3gpp",
             "ts"   to "video/mp2t",
             "flv"  to "video/x-flv",
+            // ── Audio ──────────────────────────────────────────────────────────
+            "mp3"  to "audio/mpeg",
+            "m4a"  to "audio/mp4",
+            "aac"  to "audio/aac",
+            "flac" to "audio/flac",
+            "opus" to "audio/opus",
+            "wav"  to "audio/wav",
+            "ogg"  to "audio/ogg",
+            "wma"  to "audio/x-ms-wma",
+            "aiff" to "audio/aiff",
+            // ── Image ──────────────────────────────────────────────────────────
+            "jpg"  to "image/jpeg",
+            "jpeg" to "image/jpeg",
+            "png"  to "image/png",
+            "gif"  to "image/gif",
+            "webp" to "image/webp",
+            "bmp"  to "image/bmp",
+            "heic" to "image/heic",
+            "heif" to "image/heif",
+            "avif" to "image/avif",
+            "svg"  to "image/svg+xml",
+            "tiff" to "image/tiff",
+            "tif"  to "image/tiff",
         )
 
-        fun getMimeType(filename: String): String {
+        fun getMimeType(filename: String, fallback: String = "application/octet-stream"): String {
             val ext = filename.substringAfterLast('.', "").lowercase(Locale.ROOT)
             return MIME_BY_EXTENSION[ext]
                 ?: URLConnection.guessContentTypeFromName(filename)
-                ?: "video/mp4"
+                ?: fallback
         }
+
+        fun isAudio(mimeType: String) = mimeType.startsWith("audio/")
+        fun isImage(mimeType: String) = mimeType.startsWith("image/")
+        fun isVideo(mimeType: String) = mimeType.startsWith("video/")
     }
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
@@ -60,57 +88,55 @@ class FletMediaScannerPlugin : FlutterPlugin, MethodCallHandler {
 
     override fun onMethodCall(call: MethodCall, result: Result) {
         when (call.method) {
-            "saveVideo" -> saveVideo(call, result)
-            "deleteVideo" -> deleteVideo(call, result)
-            "listVideos" -> listVideos(call, result)
-            else -> result.notImplemented()
+            "saveVideo"   -> saveVideo(call, result)
+            "deleteVideo" -> deleteMedia(call, result)   // reused for all media types
+            "listVideos"  -> listVideos(call, result)
+            "saveAudio"   -> saveAudio(call, result)
+            "listAudio"   -> listAudio(call, result)
+            "saveImage"   -> saveImage(call, result)
+            "listImages"  -> listImages(call, result)
+            "deleteMedia" -> deleteMedia(call, result)
+            else          -> result.notImplemented()
         }
     }
 
-    private fun saveVideo(call: MethodCall, result: Result) {
-        val path = call.argument<String>("path")
-        val requestedFileName = call.argument<String>("fileName")
-        val album = call.argument<String>("album")
-            ?.trim()
-            ?.trim('/')
-            ?.takeIf { it.isNotBlank() }
-            ?: "Vidsaver"
+    // ─────────────────────────────── Shared helper ────────────────────────────
 
-        if (path.isNullOrBlank()) {
-            result.error("INVALID_ARGUMENT", "path must not be null or empty", null)
-            return
-        }
-
-        val source = File(path)
-        if (!source.isFile) {
-            result.error("FILE_NOT_FOUND", "source file does not exist: $path", null)
-            return
-        }
-
-        val displayName = requestedFileName
-            ?.trim()
-            ?.takeIf { it.isNotBlank() }
-            ?: source.name
-        val mimeType = getMimeType(displayName)
-        val relativePath = "${Environment.DIRECTORY_MOVIES}/$album"
+    /**
+     * Generic copy-into-MediaStore routine shared by video / audio / image.
+     *
+     * @param collection  the MediaStore URI to insert into
+     * @param displayName file name shown in the gallery / files app
+     * @param mimeType    MIME type of the file
+     * @param relativePath  e.g. "Movies/MyApp" or "Music/MyApp" or "Pictures/MyApp"
+     * @param isPendingColumn  e.g. MediaStore.Video.Media.IS_PENDING (API 29+)
+     * @param source      the source file to copy
+     * @param result      the Flutter result callback
+     * @param tag         log tag prefix for this call
+     */
+    private fun saveToMediaStore(
+        collection: Uri,
+        displayName: String,
+        mimeType: String,
+        relativePath: String,
+        isPendingColumn: String,
+        source: File,
+        path: String,
+        result: Result,
+        tag: String,
+    ) {
         val resolver = context.contentResolver
-        val collection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
-        } else {
-            MediaStore.Video.Media.EXTERNAL_CONTENT_URI
-        }
-
         var uri: Uri? = null
         try {
             val values = ContentValues().apply {
-                put(MediaStore.Video.Media.DISPLAY_NAME, displayName)
-                put(MediaStore.Video.Media.MIME_TYPE, mimeType)
-                put(MediaStore.Video.Media.DATE_ADDED, System.currentTimeMillis() / 1000)
-                put(MediaStore.Video.Media.DATE_MODIFIED, source.lastModified() / 1000)
-                put(MediaStore.Video.Media.SIZE, source.length())
+                put(MediaStore.MediaColumns.DISPLAY_NAME, displayName)
+                put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
+                put(MediaStore.MediaColumns.DATE_ADDED, System.currentTimeMillis() / 1000)
+                put(MediaStore.MediaColumns.DATE_MODIFIED, source.lastModified() / 1000)
+                put(MediaStore.MediaColumns.SIZE, source.length())
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    put(MediaStore.Video.Media.RELATIVE_PATH, relativePath)
-                    put(MediaStore.Video.Media.IS_PENDING, 1)
+                    put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath)
+                    put(isPendingColumn, 1)
                 }
             }
 
@@ -118,155 +144,250 @@ class FletMediaScannerPlugin : FlutterPlugin, MethodCallHandler {
                 ?: throw IllegalStateException("MediaStore insert returned null")
 
             resolver.openOutputStream(uri)?.use { output ->
-                FileInputStream(source).use { input ->
-                    input.copyTo(output)
-                }
+                FileInputStream(source).use { input -> input.copyTo(output) }
             } ?: throw IllegalStateException("Unable to open MediaStore output stream")
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                val publishedValues = ContentValues().apply {
-                    put(MediaStore.Video.Media.IS_PENDING, 0)
-                    put(MediaStore.Video.Media.SIZE, source.length())
-                }
-                resolver.update(uri, publishedValues, null, null)
+                resolver.update(
+                    uri,
+                    ContentValues().apply {
+                        put(isPendingColumn, 0)
+                        put(MediaStore.MediaColumns.SIZE, source.length())
+                    },
+                    null, null
+                )
             }
 
             result.success(
                 mapOf(
-                    "success" to true,
-                    "content_uri" to uri.toString(),
-                    "display_name" to displayName,
-                    "mime_type" to mimeType,
+                    "success"       to true,
+                    "content_uri"   to uri.toString(),
+                    "display_name"  to displayName,
+                    "mime_type"     to mimeType,
                     "relative_path" to relativePath,
-                    "source_path" to path,
-                    "size" to source.length(),
+                    "source_path"   to path,
+                    "size"          to source.length(),
                 )
             )
         } catch (e: Exception) {
-            Log.e(TAG, "saveVideo: exception: ${e.message}", e)
+            Log.e(TAG, "$tag: exception: ${e.message}", e)
             uri?.let {
-                try {
-                    resolver.delete(it, null, null)
-                } catch (deleteError: Exception) {
-                    Log.w(TAG, "saveVideo: failed to delete incomplete item: $deleteError")
-                }
+                try { resolver.delete(it, null, null) }
+                catch (de: Exception) { Log.w(TAG, "$tag: failed to clean up: $de") }
             }
             result.error("SAVE_ERROR", e.message, e.toString())
         }
     }
 
-    private fun deleteVideo(call: MethodCall, result: Result) {
-        val contentUri = call.argument<String>("contentUri")
-        if (contentUri.isNullOrBlank()) {
-            result.error("INVALID_ARGUMENT", "contentUri must not be null or empty", null)
-            return
-        }
-
-        try {
-            val uri = Uri.parse(contentUri)
-            val deletedRows = context.contentResolver.delete(uri, null, null)
-            result.success(
-                mapOf(
-                    "success" to (deletedRows > 0),
-                    "content_uri" to contentUri,
-                    "deleted_rows" to deletedRows,
-                )
-            )
-        } catch (e: Exception) {
-            Log.e(TAG, "deleteVideo: exception: ${e.message}", e)
-            result.error("DELETE_ERROR", e.message, e.toString())
-        }
-    }
-
-    private fun listVideos(call: MethodCall, result: Result) {
-        val album = call.argument<String>("album")
-            ?.trim()
-            ?.trim('/')
-            ?.takeIf { it.isNotBlank() }
-            ?: "Vidsaver"
+    /** Generic MediaStore list query shared by video / audio / image. */
+    private fun listFromMediaStore(
+        collection: Uri,
+        relativePathPrefix: String,
+        defaultMime: String,
+        listKey: String,
+        result: Result,
+        tag: String,
+    ) {
         val resolver = context.contentResolver
-        val collection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
-        } else {
-            MediaStore.Video.Media.EXTERNAL_CONTENT_URI
-        }
-
         val projection = mutableListOf(
-            MediaStore.Video.Media._ID,
-            MediaStore.Video.Media.DISPLAY_NAME,
-            MediaStore.Video.Media.MIME_TYPE,
-            MediaStore.Video.Media.SIZE,
-            MediaStore.Video.Media.DATE_ADDED,
-            MediaStore.Video.Media.DATE_MODIFIED,
+            MediaStore.MediaColumns._ID,
+            MediaStore.MediaColumns.DISPLAY_NAME,
+            MediaStore.MediaColumns.MIME_TYPE,
+            MediaStore.MediaColumns.SIZE,
+            MediaStore.MediaColumns.DATE_ADDED,
+            MediaStore.MediaColumns.DATE_MODIFIED,
         )
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            projection.add(MediaStore.Video.Media.RELATIVE_PATH)
+            projection.add(MediaStore.MediaColumns.RELATIVE_PATH)
         }
 
-        val selection: String?
-        val selectionArgs: Array<String>?
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            selection = "${MediaStore.Video.Media.RELATIVE_PATH} LIKE ?"
-            selectionArgs = arrayOf("${Environment.DIRECTORY_MOVIES}/$album%")
-        } else {
-            selection = null
-            selectionArgs = null
-        }
+        val selection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
+            "${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ?" else null
+        val selectionArgs = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
+            arrayOf("$relativePathPrefix%") else null
 
-        val videos = mutableListOf<Map<String, Any?>>()
+        val items = mutableListOf<Map<String, Any?>>()
         try {
             resolver.query(
                 collection,
                 projection.toTypedArray(),
                 selection,
                 selectionArgs,
-                "${MediaStore.Video.Media.DATE_ADDED} DESC"
+                "${MediaStore.MediaColumns.DATE_ADDED} DESC"
             )?.use { cursor ->
-                val idIndex = cursor.getColumnIndexOrThrow(MediaStore.Video.Media._ID)
-                val nameIndex = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DISPLAY_NAME)
-                val mimeIndex = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.MIME_TYPE)
-                val sizeIndex = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.SIZE)
-                val addedIndex = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DATE_ADDED)
-                val modifiedIndex = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DATE_MODIFIED)
-                val relativePathIndex = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    cursor.getColumnIndex(MediaStore.Video.Media.RELATIVE_PATH)
-                } else {
-                    -1
-                }
+                val idIdx       = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
+                val nameIdx     = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME)
+                val mimeIdx     = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.MIME_TYPE)
+                val sizeIdx     = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.SIZE)
+                val addedIdx    = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_ADDED)
+                val modifiedIdx = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_MODIFIED)
+                val pathIdx     = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
+                    cursor.getColumnIndex(MediaStore.MediaColumns.RELATIVE_PATH) else -1
 
                 while (cursor.moveToNext()) {
-                    val id = cursor.getLong(idIndex)
-                    val uri = ContentUris.withAppendedId(collection, id)
-                    val displayName = cursor.getString(nameIndex) ?: continue
-                    val relativePath = if (relativePathIndex >= 0) {
-                        cursor.getString(relativePathIndex) ?: ""
-                    } else {
-                        "${Environment.DIRECTORY_MOVIES}/$album"
-                    }
+                    val id          = cursor.getLong(idIdx)
+                    val uri         = ContentUris.withAppendedId(collection, id)
+                    val displayName = cursor.getString(nameIdx) ?: continue
+                    val relativePath = if (pathIdx >= 0)
+                        cursor.getString(pathIdx) ?: "" else relativePathPrefix
 
-                    videos.add(
+                    items.add(
                         mapOf(
-                            "content_uri" to uri.toString(),
-                            "display_name" to displayName,
-                            "mime_type" to (cursor.getString(mimeIndex) ?: getMimeType(displayName)),
+                            "content_uri"   to uri.toString(),
+                            "display_name"  to displayName,
+                            "mime_type"     to (cursor.getString(mimeIdx) ?: getMimeType(displayName, defaultMime)),
                             "relative_path" to relativePath.trimEnd('/'),
-                            "size" to cursor.getLong(sizeIndex),
-                            "date_added" to cursor.getLong(addedIndex),
-                            "date_modified" to cursor.getLong(modifiedIndex),
+                            "size"          to cursor.getLong(sizeIdx),
+                            "date_added"    to cursor.getLong(addedIdx),
+                            "date_modified" to cursor.getLong(modifiedIdx),
                         )
                     )
                 }
             }
+            result.success(mapOf("success" to true, listKey to items))
+        } catch (e: Exception) {
+            Log.e(TAG, "$tag: exception: ${e.message}", e)
+            result.error("LIST_ERROR", e.message, e.toString())
+        }
+    }
 
+    // ─────────────────────────────────── Video ────────────────────────────────
+
+    private fun saveVideo(call: MethodCall, result: Result) {
+        val path = call.argument<String>("path")
+        val requestedFileName = call.argument<String>("fileName")
+        val album = call.argument<String>("album")?.trim()?.trim('/')?.takeIf { it.isNotBlank() } ?: "MyApp"
+
+        if (path.isNullOrBlank()) { result.error("INVALID_ARGUMENT", "path must not be null or empty", null); return }
+        val source = File(path)
+        if (!source.isFile) { result.error("FILE_NOT_FOUND", "source file does not exist: $path", null); return }
+
+        val displayName = requestedFileName?.trim()?.takeIf { it.isNotBlank() } ?: source.name
+        val mimeType = getMimeType(displayName, "video/mp4")
+        val collection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
+            MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+        else MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+
+        saveToMediaStore(
+            collection, displayName, mimeType,
+            "${Environment.DIRECTORY_MOVIES}/$album",
+            MediaStore.Video.Media.IS_PENDING,
+            source, path, result, "saveVideo"
+        )
+    }
+
+    private fun listVideos(call: MethodCall, result: Result) {
+        val album = call.argument<String>("album")?.trim()?.trim('/')?.takeIf { it.isNotBlank() } ?: "MyApp"
+        val collection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
+            MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+        else MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+
+        listFromMediaStore(
+            collection,
+            "${Environment.DIRECTORY_MOVIES}/$album",
+            "video/mp4", "videos", result, "listVideos"
+        )
+    }
+
+    // ─────────────────────────────────── Audio ────────────────────────────────
+
+    private fun saveAudio(call: MethodCall, result: Result) {
+        val path = call.argument<String>("path")
+        val requestedFileName = call.argument<String>("fileName")
+        val album = call.argument<String>("album")?.trim()?.trim('/')?.takeIf { it.isNotBlank() } ?: "MyApp"
+
+        if (path.isNullOrBlank()) { result.error("INVALID_ARGUMENT", "path must not be null or empty", null); return }
+        val source = File(path)
+        if (!source.isFile) { result.error("FILE_NOT_FOUND", "source file does not exist: $path", null); return }
+
+        val displayName = requestedFileName?.trim()?.takeIf { it.isNotBlank() } ?: source.name
+        val mimeType = getMimeType(displayName, "audio/mpeg")
+        val collection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
+            MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+        else MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
+
+        saveToMediaStore(
+            collection, displayName, mimeType,
+            "${Environment.DIRECTORY_MUSIC}/$album",
+            MediaStore.Audio.Media.IS_PENDING,
+            source, path, result, "saveAudio"
+        )
+    }
+
+    private fun listAudio(call: MethodCall, result: Result) {
+        val album = call.argument<String>("album")?.trim()?.trim('/')?.takeIf { it.isNotBlank() } ?: "MyApp"
+        val collection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
+            MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+        else MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
+
+        listFromMediaStore(
+            collection,
+            "${Environment.DIRECTORY_MUSIC}/$album",
+            "audio/mpeg", "audio", result, "listAudio"
+        )
+    }
+
+    // ─────────────────────────────────── Image ────────────────────────────────
+
+    private fun saveImage(call: MethodCall, result: Result) {
+        val path = call.argument<String>("path")
+        val requestedFileName = call.argument<String>("fileName")
+        val album = call.argument<String>("album")?.trim()?.trim('/')?.takeIf { it.isNotBlank() } ?: "MyApp"
+
+        if (path.isNullOrBlank()) { result.error("INVALID_ARGUMENT", "path must not be null or empty", null); return }
+        val source = File(path)
+        if (!source.isFile) { result.error("FILE_NOT_FOUND", "source file does not exist: $path", null); return }
+
+        val displayName = requestedFileName?.trim()?.takeIf { it.isNotBlank() } ?: source.name
+        val mimeType = getMimeType(displayName, "image/jpeg")
+        val collection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
+            MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+        else MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+
+        saveToMediaStore(
+            collection, displayName, mimeType,
+            "${Environment.DIRECTORY_PICTURES}/$album",
+            MediaStore.Images.Media.IS_PENDING,
+            source, path, result, "saveImage"
+        )
+    }
+
+    private fun listImages(call: MethodCall, result: Result) {
+        val album = call.argument<String>("album")?.trim()?.trim('/')?.takeIf { it.isNotBlank() } ?: "MyApp"
+        val collection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
+            MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+        else MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+
+        listFromMediaStore(
+            collection,
+            "${Environment.DIRECTORY_PICTURES}/$album",
+            "image/jpeg", "images", result, "listImages"
+        )
+    }
+
+    // ─────────────────────────────────── Delete (universal) ───────────────────
+
+    /** Works for any content:// URI — video, audio, or image. */
+    private fun deleteMedia(call: MethodCall, result: Result) {
+        val contentUri = call.argument<String>("contentUri")
+            ?: call.argument<String>("content_uri")
+        if (contentUri.isNullOrBlank()) {
+            result.error("INVALID_ARGUMENT", "contentUri must not be null or empty", null)
+            return
+        }
+        try {
+            val uri = Uri.parse(contentUri)
+            val deletedRows = context.contentResolver.delete(uri, null, null)
             result.success(
                 mapOf(
-                    "success" to true,
-                    "videos" to videos,
+                    "success"      to (deletedRows > 0),
+                    "content_uri"  to contentUri,
+                    "deleted_rows" to deletedRows,
                 )
             )
         } catch (e: Exception) {
-            Log.e(TAG, "listVideos: exception: ${e.message}", e)
-            result.error("LIST_ERROR", e.message, e.toString())
+            Log.e(TAG, "deleteMedia: exception: ${e.message}", e)
+            result.error("DELETE_ERROR", e.message, e.toString())
         }
     }
 }
